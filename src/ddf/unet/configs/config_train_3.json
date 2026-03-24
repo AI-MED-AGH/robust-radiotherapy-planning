@@ -1,0 +1,23 @@
+{
+  "fold": 3,
+  "random_state": 12345,
+  "plans_file_path": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/preprocessed/modified_nnUNetPlansv2.1_plans_3D.pkl",
+  "folder_with_preprocessed_data": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/preprocessed/nnUNetData_plans_v2.1_stage0",
+  "deep_supervision": false,
+
+  "output_folder": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/MODELS/",
+  "log_file": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/MODELS/log_3.txt", 
+
+  "network_type": "3d_fullres",
+  "architecture_name": "Generic_UNet",
+  "initial_lr": 0.01,
+  "momentum": 0.99,
+  "nesterov": true,
+  "numOfEpochs": 1000,
+  "tr_batches_per_epoch": 250,
+  "val_batches_per_epoch": 50,
+  "checkpoint_frequency": 10,
+  "continue_training":true,
+  "checkpoint": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/MODELS/fold_3_model_best.model"
+}
+

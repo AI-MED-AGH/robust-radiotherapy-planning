@@ -1,0 +1,11 @@
+{
+  "disable_tta": true,
+  "network_type": "3d_fullres",
+  "input_folder": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/imagesTs",
+  "output_folder": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/predictionsTs/3/",
+  "plans_file_path": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/preprocessed/modified_nnUNetPlansv2.1_plans_3D.pkl",
+  "checkpoints": 
+  {
+   "1": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/MODELS/fold_3_model_best.model"
+  }
+}

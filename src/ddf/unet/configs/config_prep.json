@@ -1,0 +1,13 @@
+{
+  "default_num_threads": 1,
+  "dont_run_preprocessing": false,
+  "tl": 1,
+  "tf": 1,
+  "planner_name3d": "ExperimentPlanner3D_v21",
+  "planner_name2d": "None",
+  "verify_dataset_integrity_flag": true,
+  "random_state": 12345,
+  "preprocessing_output_dir": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/preprocessed",
+  "folder_with_raw_data": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/",
+  "folder_with_cropped_data": "/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/cropped"
+}
