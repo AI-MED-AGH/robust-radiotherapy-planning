@@ -173,7 +173,7 @@ if __name__ == "__main__":
 
     patients = sorted(glob.glob(startDir + 'Pacjent_' + sys.argv[1] + '_*'))
 
-    f = open('prostaty.txt','r')
+    f = open('prostates.txt','r')
     lines = f.readlines()
     f.close()
     mapping = {l.split()[0]:l.split()[1] for l in lines}

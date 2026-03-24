@@ -66,7 +66,7 @@ The script performs the following operations for each fraction:
 #### 3. **Target Naming Convention**
 - **Challenge**: RT STRUCT files lack consistent naming conventions for target volumes
 - **Solution**: Target names are read from an external reference file
-- **Example**: `prostaty.txt` contains the specific target naming used in the database
+- **Example**: `prostates.txt` contains the specific target naming used in the database
 - Ensures correct identification across different patients and institutions
 
 #### 4. **Dose Map Conversion**
@@ -83,7 +83,7 @@ python code/prepareFractionCT.py
 
 ### Target Naming File Format
 
-The target naming file (e.g., `prostaty.txt`) should contain patient ids and associated target name e.g.:
+The target naming file (e.g., `prostates.txt`) should contain patient ids and associated target name e.g.:
 ```
 1 PTV
 2 CTV
