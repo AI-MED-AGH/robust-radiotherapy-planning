@@ -1,104 +1,27 @@
-# Anatomical Variation Modeling for Radiation Therapy
+# ROBUST-RADIOTHERAPY-PLANNING
 
-This repository contains **data and code** for training and testing generative models that predict anatomical variations across radiation therapy fractions, along with their impact on 3D dose distributions.
+![Python](https://img.shields.io/badge/Python-3.11-lightgray?style=flat&logo=python)
+![Status](https://img.shields.io/badge/Status-In_Progress-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
 
----
+This repository contains code for training and testing Flow Matching (FM) models that predict anatomical variations across radiation therapy fractions, along with their impact on 3D dose distributions. The models are conditioned on first fraction CT scans and generate plausible anatomical variants that match the distribution of real anatomical changes observed in subsequent treatment fractions.
 
-## 📋 Repository Overview
+## Contributors
 
-This project develops generative models to learn realistic anatomical changes that occur during multi-fraction radiation therapy. The models are conditioned on first fraction CT scans and generate plausible anatomical variants that match the distribution of real anatomical changes observed in subsequent treatment fractions.
+This project is developed by a team of students:
 
----
+| Name | GitHub | Role |
+| :--- | :--- | :--- |
+| **Wiktoria Arendarczyk** | [![GitHub](https://img.shields.io/badge/-MagicWiqqu-181717?style=flat&logo=github)](https://github.com/MagicWiqqu) | Lead Researcher|
+| **Zuzanna Deszcz** | [![GitHub](https://img.shields.io/badge/-melliegrant-181717?style=flat&logo=github)](https://github.com/melliegrant) | Researcher |
+| **Cezary Moskal** | [![GitHub](https://img.shields.io/badge/-Couch--bit-181717?style=flat&logo=github)](https://github.com/Couch-bit) | Researcher |
 
-## 📂 Repository Structure
-
-```
-.
-├── code
-│     ├── ddf/                          # Dense Deformation Field approach
-│     ├── stable_diffusion/             # Stable Diffusion approach  
-│     ├── train_test_data_split.py      # Data preparation script
-│     ├── data_dict.json                # Train/test/fold assignments
-│     └── README.md                     # readme
-├── data
-│     ├── CT/                           # Folder with patient subfolders, each subfolder containing fraction CTs in nifty format 
-│     ├── DOSE/                         # Folder with patient subfolders, each subfolder containing planned dose in nifty format
-│     ├── STRUCTURES/                   # Folder with patient subfolders, each subfolder containing segmented OARs and target
-│     ├── prepareFractionCT.py          # Script for converting DICOMS to nifty
-│     ├── prostaty.txt                  # TXT file with target names used in our database
-│     └── README.md                     # readme
-├── LICENSE                            # License statement
-└── README.md                          # This file
-
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Python 3.x
-- SimpleITK
-- PyTorch
-
----
-
-## 🔑 Applications
+## Applications
 
 This framework enables:
 
-1. **Robust treatment planning**: Account for anatomical variations in dose optimization
-2. **Adaptive radiotherapy**: Predict anatomical changes for plan adaptation
-3. **Uncertainty quantification**: Quantify dose uncertainty due to anatomical variations
-4. **Quality assurance**: Validate delivered dose against predicted variations
-5. **Research**: Study inter-fraction anatomical changes and their dosimetric impact
-
----
-
-## 📖 Citation
-
-If you use this code or data in your research, please cite:
-
-```bibtex
-@article{your_paper,
-  title={Generative Models for Anatomical Variation in Radiation Therapy},
-  author={},
-  journal={},
-  year={2026},
-  doi={}
-}
-```
-
----
-
-## 📝 License
-
-MIT
-
----
-
-## ⚠️ Data Privacy
-
-This repository structure is designed for research purposes. When working with patient data:
-- Ensure all data is **de-identified** and compliant with HIPAA/GDPR
-- Obtain appropriate **IRB approval** for your institution
-- Follow institutional data sharing and privacy policies
-- Do not include identifiable patient information in public repositories
-- **DICOM files must be anonymized** before conversion to NIfTI
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Areas for improvement:
-- Additional generative model architectures
-- Enhanced uncertainty quantification methods
-- Integration with treatment planning systems
-- Validation on additional datasets
-- Improved DICOM parsing for different vendors
-
-Please open an issue or submit a Pull Request.
-
----
-
-## 📧 Contact
-
-For questions or collaborations, please contact ztabor@agh.edu.pl
+1. **Robust treatment planning**: Account for anatomical variations in dose optimization.
+2. **Adaptive radiotherapy**: Predict anatomical changes for plan adaptation.
+3. **Uncertainty quantification**: Quantify dose uncertainty due to anatomical variations.
+4. **Quality assurance**: Validate delivered dose against predicted variations.
+5. **Research**: Study inter-fraction anatomical changes and their dosimetric impact.
