@@ -23,11 +23,13 @@ def smooth_and_resample(
 ) -> sitk.Image:
     """
     Smooth and resample the provided image.
+
     Args:
         image (Image): The image we want to resample.
         shrink_factor (float): A number greater than one, such that the new image's size is original_size/shrink_factor.
         smoothing_sigma (float): Sigma for Gaussian smoothing, this is in physical (image spacing) units, not pixels.
-    Return:
+    
+    Returns:
         Image: Image which is a result of smoothing the input and then resampling it using the given sigma and shrink factor.
     """
     smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)
@@ -67,6 +69,7 @@ def multiscale_demons(
     """
     Run the given registration algorithm in a multiscale fashion. The original scale should not be given as input as the
     original images are implicitly incorporated as the base of the pyramid.
+
     Args:
         registration_algorithm (DemonsRegistrationFilter
         | DiffeomorphicDemonsRegistrationFilter
@@ -78,6 +81,7 @@ def multiscale_demons(
         shrink_factors: Shrink factors relative to the original image's size.
         smoothing_sigmas: Amount of smoothing which is done prior to resmapling the image using the given shrink factor. These
             are in physical (image spacing) units.
+    
     Returns:
         DisplacementFieldTransform
     """
