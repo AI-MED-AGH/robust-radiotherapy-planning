@@ -1,49 +1,55 @@
-import numpy as np
-import nibabel as nib
-import os
 import glob
 import json
+import os
 
-fname = '/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/data_dict.json'
-with open(fname,'r') as f:
-    data_dict = json.load(f)['test']
+import nibabel as nib
+import numpy as np
 
-ids = sorted(set([os.path.basename(item["moving_image"]).split('_')[1] for item in data_dict]))
+# Config
+DATA_FILE = "DATA/data_dict.json"
+DATA_DIR = "DATA/CT"
 
-save_dir = '/net/tscratch/people/plgztabor/ROBUST_PLANNING/CODE/DEFORMATIONS/APPLY_TRANSFORMS/STRUCTURES_Ts/'
-aff = np.eye(4)
+SAVE_DIR = "RESULTS/DEFORMATIONS/APPLY_TRANSFORMS/STRUCTURES_Ts/"
+DOSE_FILE = "dose_stats.txt"
+
+AFF = np.eye(4)
+LABELS = [1, 2, 3, 4, 5]
+
+with open(DATA_FILE, "r") as f:
+    data_dict = json.load(f)["test"]
+
+ids = sorted(
+    set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict])
+)
 
 for pid in ids:
+    os.makedirs(f"{SAVE_DIR}/Patient_{pid}/PROBABILIY_MAPS", exist_ok=True)
 
-    os.makedirs(f'{save_dir}/Patient_{pid}/PROBABILIY_MAPS', exist_ok=True)
-
-    for sid in [1,2,3,4,5]:
-        fnames = glob.glob(f'{save_dir}/Patient_{pid}/GT_Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz')
+    for sid in LABELS:
+        fnames = glob.glob(
+            f"{SAVE_DIR}/Patient_{pid}/GT_Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"
+        )
         imgs = []
         for fname in fnames:
-            imgs.append(nib.load(fname).get_fdata())
-        imgs = np.asarray(imgs,dtype=np.float32)
-        imgs = np.mean(imgs,axis=0)
+            imgs.append(nib.load(fname).get_fdata())  # type: ignore
+        imgs_mean = np.mean(imgs, axis=0)
 
-        niftiImage = nib.Nifti1Image(imgs, affine=aff)
-        sname = f'{save_dir}/Patient_{pid}/PROBABILIY_MAPS/GT_Patient_{pid}_STRUCTURE_{sid}.nii.gz'
-        nib.save(niftiImage,sname)
+        niftiImage = nib.Nifti1Image(imgs_mean, affine=AFF)
+        sname = f"{SAVE_DIR}/Patient_{pid}/PROBABILIY_MAPS/GT_Patient_{pid}_STRUCTURE_{sid}.nii.gz"
+        nib.save(niftiImage, sname)
 
         del imgs
 
-        fnames = glob.glob(f'{save_dir}/Patient_{pid}/Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz')
+        fnames = glob.glob(
+            f"{SAVE_DIR}/Patient_{pid}/Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"
+        )
         imgs = []
         for fname in fnames:
-            imgs.append(nib.load(fname).get_fdata())
-        imgs = np.asarray(imgs,dtype=np.float32)
-        imgs = np.mean(imgs,axis=0)
+            imgs.append(nib.load(fname).get_fdata())  # type: ignore
+        imgs_mean = np.mean(imgs, axis=0)
 
-        niftiImage = nib.Nifti1Image(imgs, affine=aff)
-        sname = f'{save_dir}/Patient_{pid}/PROBABILIY_MAPS/PRED_Patient_{pid}_STRUCTURE_{sid}.nii.gz'
-        nib.save(niftiImage,sname)
+        niftiImage = nib.Nifti1Image(imgs_mean, affine=AFF)
+        sname = f"{SAVE_DIR}/Patient_{pid}/PROBABILIY_MAPS/PRED_Patient_{pid}_STRUCTURE_{sid}.nii.gz"
+        nib.save(niftiImage, sname)
 
         del imgs
-        
-
-
-
