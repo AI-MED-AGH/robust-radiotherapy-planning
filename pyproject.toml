@@ -1,0 +1,48 @@
+# Project configuration
+[project]
+name = "robust-radiotherapy-planning"
+version = "0.1.0"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+# This tells pip to read dependencies directly from requirements.txt
+dependencies = { file = ["requirements.txt"] }
+
+# Ruff configuration
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+# Include Jupyter Notebooks for Ruff
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+# E: Error, F: Pyflakes, I: Isort, UP: Pyupgrade, B: Bugbear
+select = ["E", "F", "I", "UP", "B"]
+fixable = ["ALL"]
+
+# Jupyter Notebook specific settings
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = [
+    # Allow imports not at the top of the file
+    "E402",
+    # Ignore line length violations (notebooks often have long strings/data)
+    "E501",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# Mypy configuration
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+# Explicitly exclude the notebooks directory from type checking
+exclude = [
+    "^build/",
+    '^notebooks/',
+]
+
+# Standard stability settings
+warn_unused_configs = true
