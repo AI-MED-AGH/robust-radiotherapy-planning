@@ -5,8 +5,8 @@ import nibabel as nib
 from skimage.transform import resize
 
 # Config
-DATA_FILE = "DATA/data_dict.json"
-DATA_DIR = "DATA/CT"
+DATA_FILE = "src/data_full/data_dict.json"
+DATA_DIR = "src/data_full/CT"
 
 SAVE_DIR = "RESULTS/DEFORMATIONS/APPLY_TRANSFORMS/moving_images/"
 DOSE_FILE = "dose_stats.txt"

@@ -26,8 +26,8 @@ def iou(x: np.ndarray, y: np.ndarray) -> float:
 
 
 # Config
-DATA_FILE = "DATA/data_dict.json"
-DATA_DIR = "DATA/"
+DATA_FILE = "src/data_full/data_dict.json"
+DATA_DIR = "src/data_full/"
 
 SAVE_DIR = "RESULTS/DEFORMATIONS/APPLY_TRANSFORMS/STRUCTURES_Ts"
 THS = [0.1 + i * 0.1 for i in range(10)]

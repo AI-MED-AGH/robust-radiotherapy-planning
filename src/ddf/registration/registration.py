@@ -137,10 +137,12 @@ def multiscale_demons(
 
 
 # Config
+DATA_DICT = "src/data_full/data_dict.json"
+
 SAVE_TRANSFORMS_DIR = "RESULTS/TRANSFORMS/"
 SAVE_TRANSFORMED_IMAGES_DIR = "RESULTS/TRANSFORMED_IMAGES/"
 
-with open("data_dict.json", "r") as f:
+with open(DATA_DICT, "r") as f:
     data_dict = json.load(f)
 
 all_data = data_dict["0"]["train"] + data_dict["0"]["val"] + data_dict["test"]
