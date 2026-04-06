@@ -1,0 +1,18 @@
+# Ignore cache files
+__pycache__/
+
+# Ignore the data and results directories
+/src/data_full/
+/RESULTS/
+
+# Ignore files related to project setup
+/build/
+/src/robust_radiotherapy_planning.egg-info/
+
+# Ignore environment files
+.env
+.env.*
+/.venv/
+
+# Ignore checkpoint files
+.ipynb_checkpoints/
