@@ -31,7 +31,7 @@ test_ids = ids[int(len(ids) * TRAIN_FRACTION) :]
 val_num = int(len(train_ids) * VAL_FRACTION)
 
 # Create cross-validation with 5 folds
-data_dict: dict = {}
+data_dict: dict = {}  # type: ignore
 for fold in range(FOLDS):
     val_ids = train_ids[fold * val_num : min((fold + 1) * val_num, len(train_ids))]
 
@@ -40,31 +40,17 @@ for fold in range(FOLDS):
         if i in val_ids:
             continue
         dname = f"{DATA_DIR}/Patient_{i}/"
-        fraction_names = [
-            name
-            for name in sorted(glob.glob(f"{dname}/*.nii.gz"))
-            if "_fraction_1_.nii.gz" not in name
-        ]
+        fraction_names = [name for name in sorted(glob.glob(f"{dname}/*.nii.gz")) if "_fraction_1_.nii.gz" not in name]
         first_fraction_name = f"{DATA_DIR}/Patient_{i}/Patient_{i}_fraction_1_.nii.gz"
-        data_dirs = [
-            {"moving_image": first_fraction_name, "fixed_image": n}
-            for n in fraction_names
-        ]
+        data_dirs = [{"moving_image": first_fraction_name, "fixed_image": n} for n in fraction_names]
         train_files.extend(data_dirs)
 
     val_files = []
     for i in val_ids:
         dname = f"{DATA_DIR}/Patient_{i}/"
-        fraction_names = [
-            name
-            for name in sorted(glob.glob(f"{dname}/*.nii.gz"))
-            if "_fraction_1_.nii.gz" not in name
-        ]
+        fraction_names = [name for name in sorted(glob.glob(f"{dname}/*.nii.gz")) if "_fraction_1_.nii.gz" not in name]
         first_fraction_name = f"{DATA_DIR}/Patient_{i}/Patient_{i}_fraction_1_.nii.gz"
-        data_dirs = [
-            {"moving_image": first_fraction_name, "fixed_image": n}
-            for n in fraction_names
-        ]
+        data_dirs = [{"moving_image": first_fraction_name, "fixed_image": n} for n in fraction_names]
         val_files.extend(data_dirs)
 
     data_dict[fold] = {}
@@ -75,15 +61,9 @@ for fold in range(FOLDS):
 test_files = []
 for i in test_ids:
     dname = f"{DATA_DIR}/Patient_{i}/"
-    fraction_names = [
-        name
-        for name in sorted(glob.glob(f"{dname}/*.nii.gz"))
-        if "_fraction_1_.nii.gz" not in name
-    ]
+    fraction_names = [name for name in sorted(glob.glob(f"{dname}/*.nii.gz")) if "_fraction_1_.nii.gz" not in name]
     first_fraction_name = f"{DATA_DIR}/Patient_{i}/Patient_{i}_fraction_1_.nii.gz"
-    data_dirs = [
-        {"moving_image": first_fraction_name, "fixed_image": n} for n in fraction_names
-    ]
+    data_dirs = [{"moving_image": first_fraction_name, "fixed_image": n} for n in fraction_names]
     test_files.extend(data_dirs)
 
 data_dict["test"] = test_files

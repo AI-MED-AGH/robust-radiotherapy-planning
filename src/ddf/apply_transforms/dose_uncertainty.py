@@ -20,12 +20,10 @@ AFF = np.eye(4)
 TH_LOW = -700
 STRUCTURED_IDS = [2, 3, 4, 5]
 
-with open(DATA_FILE, "r") as f:
+with open(DATA_FILE) as f:
     data_dict = json.load(f)["test"]
 
-ids = sorted(
-    set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict])
-)
+ids = sorted(set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict]))
 # This line is hacky, but I can't figure out right now what it means
 flip_flags = [1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0]
 
@@ -34,10 +32,7 @@ paths = [f"{SAVE_DIR}/predictionsTs_{i}/{j}" for i in [0, 1] for j in [0, 1, 2, 
 os.makedirs(f"{SAVE_DIR}/Doses", exist_ok=True)
 mapping = {0: "rectum", 1: "bladder", 2: "prostate", 3: "femur heads"}
 
-for n, (pid, flip) in enumerate(zip(ids, flip_flags)):
-    # if pid != '03':
-    #    continue
-
+for pid, flip in zip(ids, flip_flags, strict=True):
     os.makedirs(f"{SAVE_DIR}/Doses/Patient_{pid}", exist_ok=True)
 
     print(pid)
@@ -52,14 +47,8 @@ for n, (pid, flip) in enumerate(zip(ids, flip_flags)):
     if flip:
         dose = dose[:, :, ::-1]
 
-    fnames = [
-        f"{SAVE_DIR}/STRUCTURES_Ts/Patient_{pid}/STRUCTURE_{i}_{basename}"
-        for i in STRUCTURED_IDS
-    ]
-    structures = [
-        nib.load(fname).get_fdata().swapaxes(2, 1).swapaxes(1, 0).swapaxes(2, 1)  # type: ignore
-        for fname in fnames
-    ]
+    fnames = [f"{SAVE_DIR}/STRUCTURES_Ts/Patient_{pid}/STRUCTURE_{i}_{basename}" for i in STRUCTURED_IDS]
+    structures = [nib.load(fname).get_fdata().swapaxes(2, 1).swapaxes(1, 0).swapaxes(2, 1) for fname in fnames]  # type: ignore
 
     handle = open(DOSE_FILE, "a")
     print("%" * 20, file=handle)
@@ -79,31 +68,29 @@ for n, (pid, flip) in enumerate(zip(ids, flip_flags)):
             (ddf.shape[0],) + (512, 521, 3),
             anti_aliasing=True,
             preserve_range=True,
-        )
+        )  # type: ignore
         sitk_ddf = sitk.GetImageFromArray(resized_ddf)
-        sitk_ddf.SetOrigin(ORIGIN)
-        sitk_ddf.SetSpacing(SPACING)
-        sitk_ddf.SetDirection(DIRECTION)
-        dt = sitk.DisplacementFieldTransform(sitk_ddf)
+        sitk_ddf.SetOrigin(ORIGIN)  # type: ignore
+        sitk_ddf.SetSpacing(SPACING)  # type: ignore
+        sitk_ddf.SetDirection(DIRECTION)  # type: ignore
+        dt = sitk.DisplacementFieldTransform(sitk_ddf)  # type: ignore
 
         fname = f"{SAVE_DIR}/CT_Ts/Patient_{pid}/Variants/Variant_{npath}_{basename}"
-        ct_variant = (
-            nib.load(fname).get_fdata().swapaxes(2, 1).swapaxes(1, 0).swapaxes(2, 1)  # type: ignore
-        )
+        ct_variant = nib.load(fname).get_fdata().swapaxes(2, 1).swapaxes(1, 0).swapaxes(2, 1)  # type: ignore
         ct_variant[ct_variant < TH_LOW] = TH_LOW
         dose_corrected = dose * (1 + ct_variant / 1000) / (1 + ct / 1000)
 
         sitk_dose = sitk.GetImageFromArray(dose_corrected)
-        sitk_dose.SetOrigin(ORIGIN)
-        sitk_dose.SetSpacing(SPACING)
-        sitk_dose.SetDirection(DIRECTION)
+        sitk_dose.SetOrigin(ORIGIN)  # type: ignore
+        sitk_dose.SetSpacing(SPACING)  # type: ignore
+        sitk_dose.SetDirection(DIRECTION)  # type: ignore
 
-        resampler = sitk.ResampleImageFilter()
-        resampler.SetReferenceImage(sitk_dose)  # Use fixed image as reference
-        resampler.SetInterpolator(sitk.sitkLinear)
-        resampler.SetDefaultPixelValue(0)  # Background pixel value
-        resampler.SetTransform(dt)
-        warped_dose = resampler.Execute(sitk_dose)
+        resampler = sitk.ResampleImageFilter()  # type: ignore
+        resampler.SetReferenceImage(sitk_dose)  # type: ignore
+        resampler.SetInterpolator(sitk.sitkLinear)  # type: ignore
+        resampler.SetDefaultPixelValue(0)  # type: ignore
+        resampler.SetTransform(dt)  # type: ignore
+        warped_dose = resampler.Execute(sitk_dose)  # type: ignore
 
         warped_dose = sitk.GetArrayFromImage(warped_dose)
         dose_variants.append(warped_dose)
@@ -115,16 +102,16 @@ for n, (pid, flip) in enumerate(zip(ids, flip_flags)):
     handle = open(DOSE_FILE, "a")
     print("\tDose means from anatomical variants", file=handle)
 
-    for structure, str_id in zip(structures, STRUCTURED_IDS):
+    for structure, str_id in zip(structures, STRUCTURED_IDS, strict=True):
         dose_copy_mean = np.copy(dose_mean)
         dose_copy_mean[structure == 0] = 0
-        niftiImage = nib.Nifti1Image(dose_copy_mean, affine=AFF)
+        niftiImage = nib.Nifti1Image(dose_copy_mean, affine=AFF)  # type: ignore
         sname = f"{SAVE_DIR}/Doses/Patient_{pid}/MeanDose_STRUCTURE_{str_id}_{basename}"
         nib.save(niftiImage, sname)
 
         dose_copy_std = np.copy(dose_std)
         dose_copy_std[structure == 0] = 0
-        niftiImage = nib.Nifti1Image(dose_copy_std, affine=AFF)
+        niftiImage = nib.Nifti1Image(dose_copy_std, affine=AFF)  # type: ignore
         sname = f"{SAVE_DIR}/Doses/Patient_{pid}/StdDose_STRUCTURE_{str_id}_{basename}"
         nib.save(niftiImage, sname)
 

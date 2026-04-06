@@ -34,12 +34,10 @@ THS = [0.1 + i * 0.1 for i in range(10)]
 
 LABELS = [2, 3, 4, 5]
 
-with open(DATA_FILE, "r") as f:
+with open(DATA_FILE) as f:
     data_dict = json.load(f)["test"]
 
-ids = sorted(
-    set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict])
-)
+ids = sorted(set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict]))
 
 dices: dict[int, list[float]] = {2: [], 3: [], 4: [], 5: []}
 adices: dict[int, list[float]] = {2: [], 3: [], 4: [], 5: []}
@@ -71,29 +69,25 @@ for sid in LABELS:
         adices[sid].append(float(adice_mean))
 
         # Calculate ged
-        fnames = glob.glob(
-            f"{SAVE_DIR}/Patient_{pid}/GT_Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"
-        )
+        fnames = glob.glob(f"{SAVE_DIR}/Patient_{pid}/GT_Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz")
         gt_imgs = [nib.load(fname).get_fdata() for fname in fnames]  # type: ignore
 
-        fnames = glob.glob(
-            f"{SAVE_DIR}/Patient_{pid}/Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"
-        )
+        fnames = glob.glob(f"{SAVE_DIR}/Patient_{pid}/Variants/Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz")
         pred_imgs = [nib.load(fname).get_fdata() for fname in fnames]  # type: ignore
 
-        sum1 = .0
+        sum1 = 0.0
         for i in range(len(gt_imgs)):
             for j in range(len(pred_imgs)):
                 sum1 += 1 - iou(gt_imgs[i], pred_imgs[j])
         sum1 /= len(gt_imgs) * len(pred_imgs)
 
-        sum2 = .0
+        sum2 = 0.0
         for i in range(len(gt_imgs) - 1):
             for j in range(i, len(gt_imgs)):
                 sum2 += 1 - iou(gt_imgs[i], gt_imgs[j])
         sum2 /= len(gt_imgs) * (len(gt_imgs) - 1) / 2
 
-        sum3 = .0
+        sum3 = 0.0
         for i in range(len(pred_imgs) - 1):
             for j in range(i, len(pred_imgs)):
                 sum3 += 1 - iou(pred_imgs[i], pred_imgs[j])
