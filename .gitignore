@@ -8,6 +8,7 @@ __pycache__/
 # Ignore files related to project setup
 /build/
 /src/robust_radiotherapy_planning.egg-info/
+.vscode/
 
 # Ignore environment files
 .env
