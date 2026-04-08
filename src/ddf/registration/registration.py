@@ -18,9 +18,7 @@ import os
 import SimpleITK as sitk
 
 
-def smooth_and_resample(
-    image: sitk.Image, shrink_factor: float, smoothing_sigma: float
-) -> sitk.Image:
+def smooth_and_resample(image: sitk.Image, shrink_factor: float, smoothing_sigma: float) -> sitk.Image:
     """
     Smooth and resample the provided image.
 
@@ -28,31 +26,30 @@ def smooth_and_resample(
         image (Image): The image we want to resample.
         shrink_factor (float): A number greater than one, such that the new image's size is original_size/shrink_factor.
         smoothing_sigma (float): Sigma for Gaussian smoothing, this is in physical (image spacing) units, not pixels.
-    
-    Returns:
-        Image: Image which is a result of smoothing the input and then resampling it using the given sigma and shrink factor.
-    """
-    smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)
 
-    original_spacing = image.GetSpacing()
-    original_size = image.GetSize()
+    Returns:
+        Image: Image which is a result of smoothing the input and
+            then resampling it using the given sigma and shrink factor.
+    """
+    smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)  # type: ignore
+
+    original_spacing = image.GetSpacing()  # type: ignore
+    original_size = image.GetSize()  # type: ignore
     new_size = [int(sz / shrink_factor + 0.5) for sz in original_size]
     new_spacing = [
         ((original_sz - 1) * original_spc) / (new_sz - 1)
-        for original_sz, original_spc, new_sz in zip(
-            original_size, original_spacing, new_size
-        )
+        for original_sz, original_spc, new_sz in zip(original_size, original_spacing, new_size, strict=True)
     ]
     return sitk.Resample(
         smoothed_image,
         new_size,
-        sitk.Transform(),
+        sitk.Transform(),  # type: ignore
         sitk.sitkLinear,
-        image.GetOrigin(),
+        image.GetOrigin(),  # type: ignore
         new_spacing,
-        image.GetDirection(),
+        image.GetDirection(),  # type: ignore
         0.0,
-        image.GetPixelID(),
+        image.GetPixelID(),  # type: ignore
     )
 
 
@@ -75,78 +72,72 @@ def multiscale_demons(
         | DiffeomorphicDemonsRegistrationFilter
         | FastSymmetricForcesDemonsRegistrationFilter): Any registration algorithm that has an
             Execute(fixed_image, moving_image, displacement_field_image) method.
-        fixed_image (Image): Resulting transformation maps points from this image's spatial domain to the moving image spatial domain.
-        moving_image (Image): Resulting transformation maps points from the fixed_image's spatial domain to this image's spatial domain.
-        initial_transform: Any SimpleITK transform, used to initialize the displacement field.
-        shrink_factors: Shrink factors relative to the original image's size.
-        smoothing_sigmas: Amount of smoothing which is done prior to resmapling the image using the given shrink factor. These
-            are in physical (image spacing) units.
-    
+        fixed_image (Image): Resulting transformation maps points from
+            this image's spatial domain to the moving image spatial domain.
+        moving_image (Image): Resulting transformation maps points from the fixed_image's spatial domain to
+            this image's spatial domain.
+        initial_transform (Transform | None): Any SimpleITK transform, used to initialize the displacement field.
+        shrink_factors (list[float] | None): Shrink factors relative to the original image's size.
+        smoothing_sigmas (list[float] | None): Amount of smoothing which is done prior
+            to resampling the image using the given shrink factor. These are in physical (image spacing) units.
+
     Returns:
-        DisplacementFieldTransform
+        DisplacementFieldTransform: The resulting transform.
     """
     # Create image pyramid
     fixed_images = [fixed_image]
     moving_images = [moving_image]
     if shrink_factors and smoothing_sigmas:
-        for shrink_factor, smoothing_sigma in reversed(
-            list(zip(shrink_factors, smoothing_sigmas))
-        ):
-            fixed_images.append(
-                smooth_and_resample(fixed_images[0], shrink_factor, smoothing_sigma)
-            )
-            moving_images.append(
-                smooth_and_resample(moving_images[0], shrink_factor, smoothing_sigma)
-            )
+        for shrink_factor, smoothing_sigma in reversed(list(zip(shrink_factors, smoothing_sigmas, strict=True))):
+            fixed_images.append(smooth_and_resample(fixed_images[0], shrink_factor, smoothing_sigma))
+            moving_images.append(smooth_and_resample(moving_images[0], shrink_factor, smoothing_sigma))
 
     # Create initial displacement field at lowest resolution
-    # Currently, the pixel type is required to be sitkVectorFloat64 because of a constraint imposed by the Demons filters
+    # The pixel type is required to be sitkVectorFloat64 because of a constraint imposed by the Demons filters
     if initial_transform:
         initial_displacement_field = sitk.TransformToDisplacementField(
             initial_transform,
             sitk.sitkVectorFloat64,
-            fixed_images[-1].GetSize(),
-            fixed_images[-1].GetOrigin(),
-            fixed_images[-1].GetSpacing(),
-            fixed_images[-1].GetDirection(),
+            fixed_images[-1].GetSize(),  # type: ignore
+            fixed_images[-1].GetOrigin(),  # type: ignore
+            fixed_images[-1].GetSpacing(),  # type: ignore
+            fixed_images[-1].GetDirection(),  # type: ignore
         )
     else:
         initial_displacement_field = sitk.Image(
-            fixed_images[-1].GetWidth(),
-            fixed_images[-1].GetHeight(),
-            fixed_images[-1].GetDepth(),
+            fixed_images[-1].GetWidth(),  # type: ignore
+            fixed_images[-1].GetHeight(),  # type: ignore
+            fixed_images[-1].GetDepth(),  # type: ignore
             sitk.sitkVectorFloat64,
         )
-        initial_displacement_field.CopyInformation(fixed_images[-1])
+        initial_displacement_field.CopyInformation(fixed_images[-1])  # type: ignore
 
     # Run the registration
     initial_displacement_field = registration_algorithm.Execute(
         fixed_images[-1], moving_images[-1], initial_displacement_field
-    )
+    )  # type: ignore
 
     # Start at the top of the pyramid and work our way down
-    for f_image, m_image in reversed(
-        list(zip(fixed_images[0:-1], moving_images[0:-1]))
-    ):
+    for f_image, m_image in reversed(list(zip(fixed_images[0:-1], moving_images[0:-1], strict=True))):
         initial_displacement_field = sitk.Resample(initial_displacement_field, f_image)
-        initial_displacement_field = registration_algorithm.Execute(
-            f_image, m_image, initial_displacement_field
-        )
+        initial_displacement_field = registration_algorithm.Execute(f_image, m_image, initial_displacement_field)  # type: ignore
 
-    return sitk.DisplacementFieldTransform(initial_displacement_field)
+    return sitk.DisplacementFieldTransform(initial_displacement_field)  # type: ignore
 
 
 # Config
+DATA_DICT = "src/data_full/data_dict.json"
+
 SAVE_TRANSFORMS_DIR = "RESULTS/TRANSFORMS/"
 SAVE_TRANSFORMED_IMAGES_DIR = "RESULTS/TRANSFORMED_IMAGES/"
 
-with open("data_dict.json", "r") as f:
+with open(DATA_DICT) as f:
     data_dict = json.load(f)
 
 all_data = data_dict["0"]["train"] + data_dict["0"]["val"] + data_dict["test"]
 
 if os.path.isfile("completed.json"):
-    with open("completed.json", "r") as f:
+    with open("completed.json") as f:
         completed = json.load(f)
 else:
     completed = []
@@ -165,18 +156,18 @@ for item in all_data:
     fixed = sitk.ReadImage(fixedImName, sitk.sitkFloat32)
     moving = sitk.ReadImage(movingImName, sitk.sitkFloat32)
 
-    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()
-    demons_filter.SetNumberOfIterations(120)
+    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore
+    demons_filter.SetNumberOfIterations(120)  # type: ignore
 
     # Regularization (update field - viscous, total field - elastic)
-    demons_filter.SetSmoothDisplacementField(True)
-    demons_filter.SetStandardDeviations(0.6)
+    demons_filter.SetSmoothDisplacementField(True)  # type: ignore
+    demons_filter.SetStandardDeviations(0.6)  # type: ignore
 
     # Create initial transform
     initial_transform = sitk.CenteredTransformInitializer(
         fixed,
         moving,
-        sitk.Euler3DTransform(),
+        sitk.Euler3DTransform(),  # type: ignore
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
 
@@ -193,29 +184,26 @@ for item in all_data:
     except Exception:
         continue
 
-    displacement_transform = sitk.DisplacementFieldTransform(tfm)
+    displacement_transform = sitk.DisplacementFieldTransform(tfm)  # type: ignore
     disp_field = sitk.TransformToDisplacementField(
         displacement_transform,
         sitk.sitkVectorFloat64,
-        moving.GetSize(),
-        moving.GetOrigin(),
-        moving.GetSpacing(),
-        moving.GetDirection(),
+        moving.GetSize(),  # type: ignore
+        moving.GetOrigin(),  # type: ignore
+        moving.GetSpacing(),  # type: ignore
+        moving.GetDirection(),  # type: ignore
     )
 
     # Apply using ResampleImageFilter
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetReferenceImage(fixed)
-    resampler.SetInterpolator(sitk.sitkLinear)
-    resampler.SetDefaultPixelValue(0)
-    resampler.SetTransform(displacement_transform)
+    resampler = sitk.ResampleImageFilter()  # type: ignore
+    resampler.SetReferenceImage(fixed)  # type: ignore
+    resampler.SetInterpolator(sitk.sitkLinear)  # type: ignore
+    resampler.SetDefaultPixelValue(0)  # type: ignore
+    resampler.SetTransform(displacement_transform)  # type: ignore
 
-    warped_image = resampler.Execute(moving)
+    warped_image = resampler.Execute(moving)  # type: ignore
 
-    fname = (
-        SAVE_TRANSFORMS_DIR
-        + f"transform_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
-    )
+    fname = SAVE_TRANSFORMS_DIR + f"transform_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
     sitk.WriteImage(disp_field, fname)
 
     fname = (

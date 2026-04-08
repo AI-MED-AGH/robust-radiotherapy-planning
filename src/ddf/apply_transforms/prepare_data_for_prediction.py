@@ -5,8 +5,8 @@ import nibabel as nib
 from skimage.transform import resize
 
 # Config
-DATA_FILE = "DATA/data_dict.json"
-DATA_DIR = "DATA/CT"
+DATA_FILE = "src/data_full/data_dict.json"
+DATA_DIR = "src/data_full/CT"
 
 SAVE_DIR = "RESULTS/DEFORMATIONS/APPLY_TRANSFORMS/moving_images/"
 DOSE_FILE = "dose_stats.txt"
@@ -14,14 +14,12 @@ DOSE_FILE = "dose_stats.txt"
 DSHAPE = (256, 256)
 FACTOR = 2
 
-with open(DATA_FILE, "r") as f:
+with open(DATA_FILE) as f:
     data_dict = json.load(f)["test"]
 
-ids = sorted(
-    set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict])
-)
+ids = sorted(set([os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict]))
 
-for n, pid in enumerate(ids):
+for pid in ids:
     print(pid)
 
     DATA_FILE = f"{DATA_DIR}/Patient_{pid}/Patient_{pid}_fraction_1_.nii.gz"
@@ -34,11 +32,11 @@ for n, pid in enumerate(ids):
         DSHAPE + (fixed_img.shape[2],),
         anti_aliasing=True,
         preserve_range=True,
-    )
+    )  # type: ignore
     aff[0, 0] *= FACTOR
     aff[1, 1] *= FACTOR
 
-    niftiImage = nib.Nifti1Image(resized_fixed_img, affine=aff)
+    niftiImage = nib.Nifti1Image(resized_fixed_img, affine=aff)  # type: ignore
 
     DATA_FILE = f"{SAVE_DIR}/image_{pid}_0000.nii.gz"
     nib.save(niftiImage, DATA_FILE)

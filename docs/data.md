@@ -20,18 +20,18 @@ All data files are stored in **NIfTI format** (`.nii` or `.nii.gz`) and have bee
 - **RT DOSE** → NIfTI 3D dose maps,
 - **RT STRUCT** → NIfTI 3D segmentation masks.
 
-### `DATA/CT/` - Fraction CT Scans
+### `data_full/CT/` - Fraction CT Scans
 
 Contains CT images from multiple radiation therapy fractions for each patient:
 - **First fraction CTs**: Used as conditional input for generative models (planning CT).
 - **N-th fraction CTs** (n = 2 to ~30): Real anatomical variants serving as ground truth.
 
-### `DATA/DOSE/` - 3D Dose Maps
+### `data_full/DOSE/` - 3D Dose Maps
 
 Contains calculated 3D dose distributions:
 - **Planned dose map**: Available only for the first (planning) fraction. Voxel-wise radiation dose values in Gy.
 
-### `DATA/STRUCTURES/` - Segmentation Masks
+### `data_full/STRUCTURES/` - Segmentation Masks
 
 Contains 3D segmentation images for:
 - **Organs at Risk (OARs)**: Critical structures to be spared from radiation.
