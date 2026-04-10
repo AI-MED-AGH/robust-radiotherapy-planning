@@ -74,9 +74,7 @@ def create_data_split_dict(
         src_root = src_root.parent
 
     if src_root.name != "src":
-        raise FileNotFoundError(
-            "Could not locate the 'src' directory relative to this file."
-        )
+        raise FileNotFoundError("Could not locate the 'src' directory relative to this file.")
 
     if data_root is None:
         data_root = src_root / "data_full" / "CT"
@@ -101,15 +99,9 @@ def create_data_split_dict(
             first_fraction = patient_dir / f"Patient_{patient_id}_fraction_1_.nii.gz"
 
             if not first_fraction.exists():
-                raise FileNotFoundError(
-                    f"Missing reference fraction for patient {patient_id}: {first_fraction}"
-                )
+                raise FileNotFoundError(f"Missing reference fraction for patient {patient_id}: {first_fraction}")
 
-            fraction_names = [
-                f
-                for f in sorted(patient_dir.glob("*.nii.gz"))
-                if f.name != first_fraction.name
-            ]
+            fraction_names = [f for f in sorted(patient_dir.glob("*.nii.gz")) if f.name != first_fraction.name]
 
             files.extend(
                 {
@@ -137,8 +129,7 @@ def create_data_split_dict(
 
     if train_num == 0 or train_num == len(patient_ids):
         raise ValueError(
-            "train_fraction produced an empty train set or empty test set. "
-            "Adjust train_fraction or dataset size."
+            "train_fraction produced an empty train set or empty test set. Adjust train_fraction or dataset size."
         )
 
     train_ids = patient_ids[:train_num]
