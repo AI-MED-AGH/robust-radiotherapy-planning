@@ -137,9 +137,7 @@ def create_data_split_dict(
 
     # Fold size for validation split within training pool
     if len(train_ids) < folds:
-        raise ValueError(
-            f"Number of training patients ({len(train_ids)}) must be >= number of folds ({folds})"
-        )
+        raise ValueError(f"Number of training patients ({len(train_ids)}) must be >= number of folds ({folds})")
 
     val_num = len(train_ids) // folds
 
