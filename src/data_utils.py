@@ -74,7 +74,7 @@ def create_data_split_dict(
         src_root = src_root.parent
 
     if src_root.name != "src":
-        raise FileNotFoundError("Could not locate the 'src' directory relative to this file.")
+        raise FileNotFoundError("Could not locate the 'src' directory relative to this file")
 
     if data_root is None:
         data_root = src_root / "data_full" / "CT"
@@ -86,10 +86,10 @@ def create_data_split_dict(
         raise FileNotFoundError(f"Data directory does not exist: {data_root}")
 
     if not (0 < train_fraction < 1):
-        raise ValueError("train_fraction must be between 0 and 1.")
+        raise ValueError("train_fraction must be between 0 and 1")
 
     if folds < 2:
-        raise ValueError("folds must be at least 2.")
+        raise ValueError("folds must be at least 2")
 
     def build_patient_pairs(patient_ids: list[str], ct_dir: Path) -> list[dict[str, str]]:
         files: list[dict[str, str]] = []
@@ -129,7 +129,7 @@ def create_data_split_dict(
 
     if train_num == 0 or train_num == len(patient_ids):
         raise ValueError(
-            "train_fraction produced an empty train set or empty test set. Adjust train_fraction or dataset size."
+            "train_fraction produced an empty train set or empty test set. Adjust train_fraction or dataset size"
         )
 
     train_ids = patient_ids[:train_num]
