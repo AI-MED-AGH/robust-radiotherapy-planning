@@ -1,19 +1,6 @@
-# https://github.com/InsightSoftwareConsortium/SimpleITK-Notebooks/tree/master/Python
-
-# https://simpleitk.org/doxygen/latest/html/examples.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethod1_2ImageRegistrationMethod1_8py-example.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethod2_2ImageRegistrationMethod2_8py-example.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethod3_2ImageRegistrationMethod3_8py-example.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethod4_2ImageRegistrationMethod4_8py-example.html
-
-# B_spline registration
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethodBSpline1_2ImageRegistrationMethodBSpline1_8py-example.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethodBSpline2_2ImageRegistrationMethodBSpline2_8py-example.html
-# https://simpleitk.org/doxygen/latest/html/ImageRegistrationMethodBSpline3_2ImageRegistrationMethodBSpline3_8py-example.html
-# http://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html
-
 import json
 import os
+from pathlib import Path
 
 import SimpleITK as sitk
 
@@ -22,14 +9,28 @@ def smooth_and_resample(image: sitk.Image, shrink_factor: float, smoothing_sigma
     """
     Smooth and resample the provided image.
 
-    Args:
-        image (Image): The image we want to resample.
-        shrink_factor (float): A number greater than one, such that the new image's size is original_size/shrink_factor.
-        smoothing_sigma (float): Sigma for Gaussian smoothing, this is in physical (image spacing) units, not pixels.
+    Assumptions:
+    - The input `image` is a valid 2D or 3D SimpleITK image (sitk.Image).
+    - The image has consistent spacing, origin, and direction metadata defined.
+    - `shrink_factor` > 1 and results in non-zero dimensions after resampling.
+    - `smoothing_sigma` is given in physical units (consistent with image spacing).
+    - The image size is large enough so that `(new_sz - 1)` is not zero in spacing calculation.
+    - Linear interpolation is sufficient for the intended downstream task (e.g., registration).
 
-    Returns:
-        Image: Image which is a result of smoothing the input and
-            then resampling it using the given sigma and shrink factor.
+    Returns
+    -------
+        image : Image 
+            The result of smoothing the input and then 
+            resampling it using the given sigma and shrink factor.
+
+    Parameters
+    ----------
+        image : Image 
+            The image to resample.
+        shrink_factor : float
+            A number greater than one, such that the new image's size is original_size/shrink_factor.
+        smoothing_sigma : float
+            Sigma for Gaussian smoothing, this is in physical (image spacing) units, not pixels.
     """
     smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)  # type: ignore
 
@@ -67,22 +68,41 @@ def multiscale_demons(
     Run the given registration algorithm in a multiscale fashion. The original scale should not be given as input as the
     original images are implicitly incorporated as the base of the pyramid.
 
-    Args:
-        registration_algorithm (DemonsRegistrationFilter
-        | DiffeomorphicDemonsRegistrationFilter
-        | FastSymmetricForcesDemonsRegistrationFilter): Any registration algorithm that has an
-            Execute(fixed_image, moving_image, displacement_field_image) method.
-        fixed_image (Image): Resulting transformation maps points from
-            this image's spatial domain to the moving image spatial domain.
-        moving_image (Image): Resulting transformation maps points from the fixed_image's spatial domain to
-            this image's spatial domain.
-        initial_transform (Transform | None): Any SimpleITK transform, used to initialize the displacement field.
-        shrink_factors (list[float] | None): Shrink factors relative to the original image's size.
-        smoothing_sigmas (list[float] | None): Amount of smoothing which is done prior
-            to resampling the image using the given shrink factor. These are in physical (image spacing) units.
+    Assumptions:
+    - `fixed_image` and `moving_image` are valid SimpleITK images with matching dimensionality (2D or 3D).
+    - Both images are roughly aligned in physical space (same orientation, similar spacing/origin).
+    - `registration_algorithm` implements Execute(fixed, moving, displacement_field).
+    - `shrink_factors` and `smoothing_sigmas` are of equal length and ordered from coarse to fine.
+    - Values in `shrink_factors` are > 1 and produce valid image sizes at each pyramid level.
+    - `smoothing_sigmas` are given in physical units (consistent with image spacing).
+    - If provided, `initial_transform` is defined in the same spatial domain as `fixed_image`.
+    - Displacement fields use `sitkVectorFloat64` as required by Demons-based filters.
 
-    Returns:
-        DisplacementFieldTransform: The resulting transform.
+    Returns
+    -------
+        DisplacementFieldTransform: 
+            The resulting transform.
+
+    Parameters
+    ----------
+        registration_algorithm : DemonsRegistrationFilter
+        | DiffeomorphicDemonsRegistrationFilter
+        | FastSymmetricForcesDemonsRegistrationFilter: 
+            Any registration algorithm that has an
+            Execute(fixed_image, moving_image, displacement_field_image) method.
+        fixed_image : Image
+            Resulting transformation maps points from
+            this image's spatial domain to the moving image spatial domain.
+        moving_image : Image 
+            Resulting transformation maps points from the fixed_image's spatial domain to
+            this image's spatial domain.
+        initial_transform : Transform | None
+            Any SimpleITK transform, used to initialize the displacement field.
+        shrink_factors : list[float] | None 
+            Shrink factors relative to the original image's size.
+        smoothing_sigmas : list[float] | None 
+            Amount of smoothing which is done prior
+            to resampling the image using the given shrink factor. These are in physical (image spacing) units.
     """
     # Create image pyramid
     fixed_images = [fixed_image]
@@ -125,94 +145,145 @@ def multiscale_demons(
     return sitk.DisplacementFieldTransform(initial_displacement_field)  # type: ignore
 
 
-# Config
-DATA_DICT = "src/data_full/data_dict.json"
+def run_demons_registration_pipeline(
+    data_dict_path: Path, 
+    save_transforms_dir: Path,
+    save_transformed_images_dir: Path,
+    completed_path: Path = Path("completed.json"),
+    iterations: int = 120,
+    shrink_factors: list[float] | None = None,
+    smoothing_sigmas: list[float] | None = None,
+) -> None:
+    """
+    Run multiscale diffeomorphic demons registration for all image pairs defined in the
+    input data dictionary, save the resulting displacement fields and warped images, and
+    track completed cases in a JSON file.
 
-SAVE_TRANSFORMS_DIR = "RESULTS/TRANSFORMS/"
-SAVE_TRANSFORMED_IMAGES_DIR = "RESULTS/TRANSFORMED_IMAGES/"
+    Assumptions:
+    - `data_dict_path` points to a valid JSON file with keys `"0"` and `"test"`.
+    - The `"0"` entry contains `"train"` and `"val"` subsets with image-pair dictionaries.
+    - Each item contains valid `"fixed_image"` and `"moving_image"` file paths.
+    - Image filenames follow the pattern `Patient_<id>_fraction_<id>_.nii.gz`.
+    - Fixed and moving images are valid 3D SimpleITK images with matching dimensionality.
+    - `multiscale_demons(...)` is available and returns a valid displacement field transform.
+    - `save_transforms_dir` and `save_transformed_images_dir` are writable locations.
+    - Completed cases are stored as `[patient_id, fixed_id, moving_id]` lists in `completed_path`.
 
-with open(DATA_DICT) as f:
-    data_dict = json.load(f)
+    Returns
+    -------
+        None:
+            The function saves displacement fields, warped images, and updates the
+            completed-cases JSON file in place.
 
-all_data = data_dict["0"]["train"] + data_dict["0"]["val"] + data_dict["test"]
+    Parameters
+    ----------
+        data_dict_path : Path
+            Path to the JSON file containing the train, validation, and test image pairs.
+        save_transforms_dir : Path
+            Directory where displacement field images will be saved.
+        save_transformed_images_dir : Path
+            Directory where transformed moving images will be saved.
+        completed_path : Path
+            Path to the JSON file used to track already processed image pairs.
+        iterations : int
+            Number of iterations used by the diffeomorphic demons filter at each scale.
+        shrink_factors : list[float] | None
+            Shrink factors relative to the original image size for the multiscale pyramid.
+        smoothing_sigmas : list[float] | None
+            Gaussian smoothing sigmas used before resampling at each pyramid level.
+            These are given in physical (image spacing) units.
+    """
+    if shrink_factors is None:
+        shrink_factors = [16, 8, 4, 2]
 
-if os.path.isfile("completed.json"):
-    with open("completed.json") as f:
-        completed = json.load(f)
-else:
-    completed = []
+    if smoothing_sigmas is None:
+        smoothing_sigmas = [16, 8, 4, 2]
 
-for item in all_data:
-    fixedImName = item["fixed_image"]
-    movingImName = item["moving_image"]
+    save_transforms_dir.mkdir(parents=True, exist_ok=True)
+    save_transformed_images_dir.mkdir(parents=True, exist_ok=True)
 
-    patient_id = os.path.basename(fixedImName).split("_")[1]
-    fixed_id = os.path.basename(fixedImName).split("_")[3]
-    moving_id = os.path.basename(movingImName).split("_")[3]
+    with open(data_dict_path) as f:
+        data_dict = json.load(f)
 
-    if [patient_id, fixed_id, moving_id] in completed:
-        continue
+    all_data = data_dict["0"]["train"] + data_dict["0"]["val"] + data_dict["test"]
 
-    fixed = sitk.ReadImage(fixedImName, sitk.sitkFloat32)
-    moving = sitk.ReadImage(movingImName, sitk.sitkFloat32)
+    if os.path.isfile(completed_path):
+        with open(completed_path) as f:
+            completed = json.load(f)
+    else:
+        completed = []
 
-    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore
-    demons_filter.SetNumberOfIterations(120)  # type: ignore
+    for item in all_data:
+        fixed_im_name = item["fixed_image"]
+        moving_im_name = item["moving_image"]
 
-    # Regularization (update field - viscous, total field - elastic)
-    demons_filter.SetSmoothDisplacementField(True)  # type: ignore
-    demons_filter.SetStandardDeviations(0.6)  # type: ignore
+        patient_id = os.path.basename(fixed_im_name).split("_")[1]
+        fixed_id = os.path.basename(fixed_im_name).split("_")[3]
+        moving_id = os.path.basename(moving_im_name).split("_")[3]
 
-    # Create initial transform
-    initial_transform = sitk.CenteredTransformInitializer(
-        fixed,
-        moving,
-        sitk.Euler3DTransform(),  # type: ignore
-        sitk.CenteredTransformInitializerFilter.GEOMETRY,
-    )
+        case_id = [patient_id, fixed_id, moving_id]
+        if case_id in completed:
+            continue
 
-    # Run the registration
-    try:
-        tfm = multiscale_demons(
-            registration_algorithm=demons_filter,
-            fixed_image=fixed,
-            moving_image=moving,
-            initial_transform=initial_transform,
-            shrink_factors=[16, 8, 4, 2],
-            smoothing_sigmas=[16, 8, 4, 2],
+        fixed = sitk.ReadImage(fixed_im_name, sitk.sitkFloat32)
+        moving = sitk.ReadImage(moving_im_name, sitk.sitkFloat32)
+
+        demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore
+        demons_filter.SetNumberOfIterations(iterations)  # type: ignore
+        demons_filter.SetSmoothDisplacementField(True)  # type: ignore
+        demons_filter.SetStandardDeviations(0.6)  # type: ignore
+
+        initial_transform = sitk.CenteredTransformInitializer(
+            fixed,
+            moving,
+            sitk.Euler3DTransform(),  # type: ignore
+            sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
-    except Exception:
-        continue
 
-    displacement_transform = sitk.DisplacementFieldTransform(tfm)  # type: ignore
-    disp_field = sitk.TransformToDisplacementField(
-        displacement_transform,
-        sitk.sitkVectorFloat64,
-        moving.GetSize(),  # type: ignore
-        moving.GetOrigin(),  # type: ignore
-        moving.GetSpacing(),  # type: ignore
-        moving.GetDirection(),  # type: ignore
-    )
+        print(f"Starting registration: patient {patient_id}, fixed {fixed_id}, moving {moving_id}")
 
-    # Apply using ResampleImageFilter
-    resampler = sitk.ResampleImageFilter()  # type: ignore
-    resampler.SetReferenceImage(fixed)  # type: ignore
-    resampler.SetInterpolator(sitk.sitkLinear)  # type: ignore
-    resampler.SetDefaultPixelValue(0)  # type: ignore
-    resampler.SetTransform(displacement_transform)  # type: ignore
+        try:
+            tfm = multiscale_demons(
+                registration_algorithm=demons_filter,
+                fixed_image=fixed,
+                moving_image=moving,
+                initial_transform=initial_transform,
+                shrink_factors=shrink_factors,
+                smoothing_sigmas=smoothing_sigmas,
+            )
+            print(f"Finished registration: patient {patient_id}, fixed {fixed_id}, moving {moving_id}")
+        except Exception as e:
+            print(f"Registration failed for patient {patient_id}, fixed {fixed_id}, moving {moving_id}: {e}")
+            continue
 
-    warped_image = resampler.Execute(moving)  # type: ignore
+        disp_field = sitk.TransformToDisplacementField(
+            tfm,
+            sitk.sitkVectorFloat64,
+            moving.GetSize(),  # type: ignore
+            moving.GetOrigin(),  # type: ignore
+            moving.GetSpacing(),  # type: ignore
+            moving.GetDirection(),  # type: ignore
+        )
 
-    fname = SAVE_TRANSFORMS_DIR + f"transform_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
-    sitk.WriteImage(disp_field, fname)
+        resampler = sitk.ResampleImageFilter()  # type: ignore
+        resampler.SetReferenceImage(fixed)  # type: ignore
+        resampler.SetInterpolator(sitk.sitkLinear)  # type: ignore
+        resampler.SetDefaultPixelValue(0)  # type: ignore
+        resampler.SetTransform(tfm)  # type: ignore
 
-    fname = (
-        SAVE_TRANSFORMED_IMAGES_DIR
-        + f"transformed_image_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
-    )
-    sitk.WriteImage(warped_image, fname)
+        warped_image = resampler.Execute(moving)  # type: ignore
 
-    completed.append((patient_id, fixed_id, moving_id))
+        transform_path = save_transforms_dir / (
+            f"transform_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
+        )
+        sitk.WriteImage(disp_field, str(transform_path))
 
-    with open("completed.json", "w") as f:
-        json.dump(completed, f, indent=4)
+        warped_image_path = save_transformed_images_dir / (
+            f"transformed_image_patient_{patient_id}_fixed_{fixed_id}_moving_{moving_id}.nii.gz"
+        )
+        sitk.WriteImage(warped_image, str(warped_image_path))
+
+        completed.append(case_id)
+
+        with open(completed_path, "w") as f:
+            json.dump(completed, f, indent=4)
