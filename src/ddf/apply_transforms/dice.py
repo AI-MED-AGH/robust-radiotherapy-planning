@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import nibabel as nib
 import numpy as np
@@ -192,7 +193,7 @@ def evaluate_structure_probability_maps(
     results_path: Path = Path("results.json"),
     thresholds: list[float] | None = None,
     labels: list[int] | None = None,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """
     Evaluate predicted structure probability maps on the test split using gray-level Dice,
     averaged Dice over thresholds (aDice), and generalized energy distance (GED). Results
@@ -290,12 +291,8 @@ def evaluate_structure_probability_maps(
                 dice = compute_gray_level_dice(gt, pred)
                 adice = compute_adice(gt, pred, thresholds)
 
-                gt_variant_paths = sorted(
-                    gt_variants_dir.glob(f"Variant_*_STRUCTURE_{label}_Patient_*.nii.gz")
-                )
-                pred_variant_paths = sorted(
-                    pred_variants_dir.glob(f"Variant_*_STRUCTURE_{label}_Patient_*.nii.gz")
-                )
+                gt_variant_paths = sorted(gt_variants_dir.glob(f"Variant_*_STRUCTURE_{label}_Patient_*.nii.gz"))
+                pred_variant_paths = sorted(pred_variants_dir.glob(f"Variant_*_STRUCTURE_{label}_Patient_*.nii.gz"))
 
                 if not gt_variant_paths:
                     raise FileNotFoundError(

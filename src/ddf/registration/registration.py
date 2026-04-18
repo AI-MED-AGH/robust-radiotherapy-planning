@@ -19,13 +19,13 @@ def smooth_and_resample(image: sitk.Image, shrink_factor: float, smoothing_sigma
 
     Returns
     -------
-        image : Image 
-            The result of smoothing the input and then 
+        image : Image
+            The result of smoothing the input and then
             resampling it using the given sigma and shrink factor.
 
     Parameters
     ----------
-        image : Image 
+        image : Image
             The image to resample.
         shrink_factor : float
             A number greater than one, such that the new image's size is original_size/shrink_factor.
@@ -80,27 +80,27 @@ def multiscale_demons(
 
     Returns
     -------
-        DisplacementFieldTransform: 
+        DisplacementFieldTransform:
             The resulting transform.
 
     Parameters
     ----------
         registration_algorithm : DemonsRegistrationFilter
         | DiffeomorphicDemonsRegistrationFilter
-        | FastSymmetricForcesDemonsRegistrationFilter: 
+        | FastSymmetricForcesDemonsRegistrationFilter:
             Any registration algorithm that has an
             Execute(fixed_image, moving_image, displacement_field_image) method.
         fixed_image : Image
             Resulting transformation maps points from
             this image's spatial domain to the moving image spatial domain.
-        moving_image : Image 
+        moving_image : Image
             Resulting transformation maps points from the fixed_image's spatial domain to
             this image's spatial domain.
         initial_transform : Transform | None
             Any SimpleITK transform, used to initialize the displacement field.
-        shrink_factors : list[float] | None 
+        shrink_factors : list[float] | None
             Shrink factors relative to the original image's size.
-        smoothing_sigmas : list[float] | None 
+        smoothing_sigmas : list[float] | None
             Amount of smoothing which is done prior
             to resampling the image using the given shrink factor. These are in physical (image spacing) units.
     """
@@ -146,7 +146,7 @@ def multiscale_demons(
 
 
 def run_demons_registration_pipeline(
-    data_dict_path: Path, 
+    data_dict_path: Path,
     save_transforms_dir: Path,
     save_transformed_images_dir: Path,
     completed_path: Path = Path("completed.json"),

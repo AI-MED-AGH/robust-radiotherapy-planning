@@ -165,7 +165,9 @@ def apply_predicted_transforms(
             structure_variants = glob.glob(str(patient_structures_dir / "*.nii.gz"))
 
             if not structure_variants:
-                raise FileNotFoundError(f"No structure variant files found for patient {pid} in: {patient_structures_dir}")
+                raise FileNotFoundError(
+                    f"No structure variant files found for patient {pid} in: {patient_structures_dir}"
+                )
 
             for variant_idx, variant_file in enumerate(structure_variants):
                 print(f"{variant_idx=}")

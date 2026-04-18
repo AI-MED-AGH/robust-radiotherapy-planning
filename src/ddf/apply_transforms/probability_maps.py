@@ -100,9 +100,7 @@ def create_structure_probability_maps(
             probability_maps_dir.mkdir(parents=True, exist_ok=True)
 
             for sid in labels:
-                gt_variant_paths = sorted(
-                    gt_variants_dir.glob(f"Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz")
-                )
+                gt_variant_paths = sorted(gt_variants_dir.glob(f"Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"))
                 if not gt_variant_paths:
                     raise FileNotFoundError(
                         f"No GT variant files found for patient {pid}, structure {sid} in: {gt_variants_dir}"
@@ -120,9 +118,7 @@ def create_structure_probability_maps(
                 gt_save_path = probability_maps_dir / f"GT_Patient_{pid}_STRUCTURE_{sid}.nii.gz"
                 nib.save(gt_nifti, str(gt_save_path))
 
-                pred_variant_paths = sorted(
-                    pred_variants_dir.glob(f"Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz")
-                )
+                pred_variant_paths = sorted(pred_variants_dir.glob(f"Variant_*_STRUCTURE_{sid}_Patient_*.nii.gz"))
                 if not pred_variant_paths:
                     raise FileNotFoundError(
                         f"No predicted variant files found for patient {pid}, structure {sid} in: {pred_variants_dir}"

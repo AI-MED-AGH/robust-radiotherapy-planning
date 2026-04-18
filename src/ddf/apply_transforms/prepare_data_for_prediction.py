@@ -87,9 +87,7 @@ def prepare_moving_images_for_inference(
             aff = nifti.affine.copy()  # type: ignore
 
             if fixed_img.ndim != 3:
-                raise ValueError(
-                    f"Expected a 3D image for patient {pid}, but got shape {fixed_img.shape}"
-                )
+                raise ValueError(f"Expected a 3D image for patient {pid}, but got shape {fixed_img.shape}")
 
             resized_fixed_img = resize(
                 fixed_img,
