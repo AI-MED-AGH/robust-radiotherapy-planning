@@ -4,7 +4,7 @@ This file serves as a short guide on how to set up the environment for using thi
 
 ## Installing Dependencies
 
-This project uses `uv` to manage dependencies. In order to properly use the project and contribute it should be installed through Windows PowerShell:
+This project uses `uv` to manage dependencies. In order to properly use the project and contribute, it should be installed through Windows PowerShell:
 
 ```
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -21,6 +21,8 @@ uv sync --python python
 ```
 uv pip sync pyproject.toml --python python --system
 ```
+
+**IMPORTANT**: NEVER sync to `base` when using `conda` as that can break the `conda` installation (`uv` will remove conda-specific packages).
 
 This project uses PyTorch. The default environment uses CPU, but for heavier code it is preferred to use GPU. The project directly manages a CUDA 12.8 PyTorch installation. This version may not work for everyone, so adding more versions can be discussed in the future. In order to install this version of PyTorch instead one should add the flag `--extra gpu`:
 1. Syncing to a `.venv`:
