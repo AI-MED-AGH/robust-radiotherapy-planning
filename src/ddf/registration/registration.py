@@ -14,7 +14,7 @@ def smooth_and_resample(image: sitk.Image, shrink_factor: float, smoothing_sigma
     - The image has consistent spacing, origin, and direction metadata defined.
     - `shrink_factor` > 1 and results in non-zero dimensions after resampling.
     - `smoothing_sigma` is given in physical units (consistent with image spacing).
-    - The image size is large enough so that `(new_sz - 1)` is not zero in spacing calculation.
+    - The image size is large enough so that `(new_sz - 1)` is not negative in spacing calculation.
     - Linear interpolation is sufficient for the intended downstream task (e.g., registration).
 
     Returns

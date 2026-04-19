@@ -104,7 +104,13 @@ def apply_predicted_transforms(
 
     ids = sorted({os.path.basename(item["moving_image"]).split("_")[1] for item in data_dict["test"]})
 
-    prediction_paths = [save_dir / f"predictionsTs_{i}" / str(j) for i in [0, 1] for j in [0, 1, 2, 3, 4]]
+    prediction_paths = sorted(
+        path
+        for parent in save_dir.glob("predictionsTs_*")
+        if parent.is_dir()
+        for path in parent.iterdir()
+        if path.is_dir()
+    )
 
     for prediction_path in prediction_paths:
         if not prediction_path.is_dir():
@@ -204,8 +210,8 @@ def apply_predicted_transforms(
 
                 if ddf.ndim != 4:
                     raise ValueError(
-                        f"Predicted displacement field for patient {pid} has invalid shape {ddf.shape}. "
-                        "Expected a 4D array after squeeze and axis swaps."
+                        f"Predicted displacement field for patient {pid} has invalid shape {ddf.shape}."
+                        "Expected a 4D array after squeeze and axis swaps"
                     )
 
                 resized_ddf = resize(
@@ -291,9 +297,14 @@ def iou(x: np.ndarray, y: np.ndarray) -> float:
             First binary array.
         y : np.ndarray
             Second binary array.
+
+    Raises
+    ------
+        ValueError
+            If the input arrays are not of the same shape.
     """
     if x.shape != y.shape:
-        raise ValueError(f"Input arrays must have the same shape, got {x.shape} and {y.shape}.")
+        raise ValueError(f"Input arrays must have the same shape, got {x.shape} and {y.shape}")
 
     union = x + y
     union[union > 0] = 1
@@ -331,9 +342,14 @@ def compute_gray_level_dice(gt: np.ndarray, pred: np.ndarray) -> float:
             Ground-truth probability map.
         pred : np.ndarray
             Predicted probability map.
+
+    Raises
+    ------
+        ValueError
+            If the input arrays are not of the same shape.
     """
     if gt.shape != pred.shape:
-        raise ValueError(f"Input arrays must have the same shape, got {gt.shape} and {pred.shape}.")
+        raise ValueError(f"Input arrays must have the same shape, got {gt.shape} and {pred.shape}")
 
     denominator = np.sum(gt) + np.sum(pred)
     if denominator == 0:
@@ -364,12 +380,17 @@ def compute_adice(gt: np.ndarray, pred: np.ndarray, thresholds: list[float]) -> 
             Predicted probability map.
         thresholds : list[float]
             Thresholds used to binarize the probability maps.
+
+    Raises
+    ------
+        ValueError
+            If `gt` and `pred` do not have the same shape, or if `thresholds` is empty.
     """
     if gt.shape != pred.shape:
-        raise ValueError(f"Input arrays must have the same shape, got {gt.shape} and {pred.shape}.")
+        raise ValueError(f"Input arrays must have the same shape, got {gt.shape} and {pred.shape}")
 
     if not thresholds:
-        raise ValueError("Threshold list must not be empty.")
+        raise ValueError("Threshold list must not be empty")
 
     scores = []
     for threshold in thresholds:
@@ -408,16 +429,21 @@ def compute_ged(gt_imgs: list[np.ndarray], pred_imgs: list[np.ndarray]) -> float
             Ground-truth segmentation variants.
         pred_imgs : list[np.ndarray]
             Predicted segmentation variants.
+
+    Raises
+    ------
+        ValueError
+            If `gt_imgs` or `pred_imgs` is empty.
     """
     if not gt_imgs:
-        raise ValueError("Ground-truth image list must not be empty.")
+        raise ValueError("Ground-truth image list must not be empty")
     if not pred_imgs:
-        raise ValueError("Predicted image list must not be empty.")
+        raise ValueError("Predicted image list must not be empty")
 
     reference_shape = gt_imgs[0].shape
     for img in gt_imgs + pred_imgs:
         if img.shape != reference_shape:
-            raise ValueError("All images used for GED computation must have the same shape.")
+            raise ValueError("All images used for GED computation must have the same shape")
 
     sum1 = 0.0
     for gt_img in gt_imgs:
@@ -465,7 +491,7 @@ def evaluate_structure_probability_maps(
     Assumptions:
     - `data_file` points to a valid JSON file containing a `"test"` split.
     - Test items contain `"moving_image"` paths following the pattern `Patient_<id>_fraction_<id>_.nii.gz`.
-    - Probability maps are stored in `save_dir / Patient_<id> / PROBABILIY_MAPS /`.
+    - Probability maps are stored in `save_dir / Patient_<id> / PROBABILITY_MAPS /`.
     - Ground-truth variant masks are stored in `save_dir / Patient_<id> / GT_Variants /`.
     - Predicted variant masks are stored in `save_dir / Patient_<id> / Variants /`.
     - Probability maps and variant masks for the same patient and structure are shape-compatible.
@@ -488,6 +514,21 @@ def evaluate_structure_probability_maps(
             Thresholds used to compute aDice. If `None`, defaults to `[0.1, ..., 1.0]`.
         labels : list[int] | None
             Structure labels to evaluate. If `None`, defaults to `[2, 3, 4, 5]`.
+
+    Raises
+    ------
+        FileNotFoundError
+            If `data_file` does not exist, if `save_dir` does not exist, or if any
+            required patient subdirectories, probability maps, or variant files
+            are missing.
+
+        ValueError
+            If the JSON file does not contain a valid `"test"` key, if `"test"` is
+            not a list, or if any test item is missing the `"moving_image"` field.
+
+        Exception
+            Any exception raised during per-patient processing is caught and recorded
+            in `failed_cases`, but does not stop execution.
     """
     if not data_file.is_file():
         raise FileNotFoundError(f"Data split file does not exist: {data_file}")
@@ -527,7 +568,7 @@ def evaluate_structure_probability_maps(
         for pid in ids:
             try:
                 patient_dir = save_dir / f"Patient_{pid}"
-                prob_maps_dir = patient_dir / "PROBABILIY_MAPS"
+                prob_maps_dir = patient_dir / "PROBABILITY_MAPS"
                 gt_variants_dir = patient_dir / "GT_Variants"
                 pred_variants_dir = patient_dir / "Variants"
 
@@ -686,6 +727,17 @@ def prepare_moving_images_for_inference(
             Scaling factor applied to the first two affine diagonal elements after resizing.
         num_channels : int
             Number of identical channel-specific output files to save per patient.
+
+    Raises
+    ------
+        FileNotFoundError
+            If `data_file` does not exist, if `data_dir` does not exist, or if a
+            required moving image file for any patient is missing.
+
+        ValueError
+            If the JSON file does not contain a valid `"test"` key, if `"test"` is
+            not a list, if any test item is missing the `"moving_image"` field, or
+            if an input image is not 3-dimensional.
     """
     if not data_file.is_file():
         raise FileNotFoundError(f"Data split file does not exist: {data_file}")
@@ -799,9 +851,11 @@ def create_structure_probability_maps(
     Raises
     ------
         FileNotFoundError
-            If the input JSON file or save directory does not exist.
+            If `data_file` does not exist or if `save_dir` does not exist.
+
         ValueError
-            If the JSON structure is invalid or required fields are missing.
+            If the JSON file does not contain a valid `"test"` key, if `"test"` is
+            not a list, or if any test item is missing the `"moving_image"` field.
     """
     if not data_file.is_file():
         raise FileNotFoundError(f"Data split file does not exist: {data_file}")
@@ -861,7 +915,7 @@ def create_structure_probability_maps(
                 gt_shapes = {img.shape for img in gt_imgs}
                 if len(gt_shapes) != 1:
                     raise ValueError(
-                        f"GT variant files for patient {pid}, structure {sid} do not all share the same shape."
+                        f"GT variant files for patient {pid}, structure {sid} do not all share the same shape"
                     )
 
                 gt_mean = np.mean(gt_imgs, axis=0)
@@ -879,7 +933,7 @@ def create_structure_probability_maps(
                 pred_shapes = {img.shape for img in pred_imgs}
                 if len(pred_shapes) != 1:
                     raise ValueError(
-                        f"Predicted variant files for patient {pid}, structure {sid} do not all share the same shape."
+                        f"Predicted variant files for patient {pid}, structure {sid} do not all share the same shape"
                     )
 
                 pred_mean = np.mean(pred_imgs, axis=0)
