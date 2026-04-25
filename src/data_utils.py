@@ -30,39 +30,39 @@ def create_data_split_dict(
 
     Returns
     -------
-    data_dict : dict
-        Dictionary with cross-validation folds and test set:
-        {
-            0: {"train": [...], "val": [...]},
-            1: {"train": [...], "val": [...]},
-            ...
-            "test": [...]
-        }
+        data_dict : dict
+            Dictionary with cross-validation folds and test set:
+            {
+                0: {"train": [...], "val": [...]},
+                1: {"train": [...], "val": [...]},
+                ...
+                "test": [...]
+            }
 
     Parameters
     ----------
-    seed : int
-        Random seed for shuffling patient IDs.
-    train_fraction : float
-        Fraction of patients used for train+validation pool.
-        Remaining patients go to test set.
-    folds : int
-        Number of cross-validation folds.
-    data_root : Path | None
-        Path to CT data folder. If None, defaults to:
-        <src>/data_full/CT
-    output_json : Path | None
-        Path to output JSON file. If None, defaults to:
-        <src>/data_full/data_dict.json
-    save : bool
-        Whether to save the resulting dictionary as JSON.
+        seed : int
+            Random seed for shuffling patient IDs.
+        train_fraction : float
+            Fraction of patients used for train+validation pool.
+            Remaining patients go to test set.
+        folds : int
+            Number of cross-validation folds.
+        data_root : Path | None
+            Path to CT data folder. If None, defaults to:
+            <src>/data_full/CT
+        output_json : Path | None
+            Path to output JSON file. If None, defaults to:
+            <src>/data_full/data_dict_encoder.json
+        save : bool
+            Whether to save the resulting dictionary as JSON.
 
     Raises
     ------
-    FileNotFoundError
-        If the data directory does not exist.
-    ValueError
-        If parameters are invalid or no patients are found.
+        FileNotFoundError
+            If the data directory does not exist.
+        ValueError
+            If parameters are invalid or no patients are found.
     """
 
     # Resolve paths relative to this file, assuming file is somewhere inside src/
@@ -91,25 +91,15 @@ def create_data_split_dict(
     if folds < 2:
         raise ValueError("folds must be at least 2")
 
-    def build_patient_pairs(patient_ids: list[str], ct_dir: Path) -> list[dict[str, str]]:
-        files: list[dict[str, str]] = []
+    def build_patient_cts(patient_ids: list[str], ct_dir: Path) -> list[str]:
+        files: list[str] = []
 
         for patient_id in patient_ids:
             patient_dir = ct_dir / f"Patient_{patient_id}"
-            first_fraction = patient_dir / f"Patient_{patient_id}_fraction_1_.nii.gz"
 
-            if not first_fraction.exists():
-                raise FileNotFoundError(f"Missing reference fraction for patient {patient_id}: {first_fraction}")
+            fraction_names = [f for f in sorted(patient_dir.glob("*.nii.gz"))]
 
-            fraction_names = [f for f in sorted(patient_dir.glob("*.nii.gz")) if f.name != first_fraction.name]
-
-            files.extend(
-                {
-                    "moving_image": str(first_fraction),
-                    "fixed_image": str(f),
-                }
-                for f in fraction_names
-            )
+            files.extend(str(f) for f in fraction_names)
 
         return files
 
@@ -151,11 +141,11 @@ def create_data_split_dict(
         fold_train_ids = [pid for pid in train_ids if pid not in val_ids]
 
         data_dict[fold] = {
-            "train": build_patient_pairs(fold_train_ids, data_root),
-            "val": build_patient_pairs(val_ids, data_root),
+            "train": build_patient_cts(fold_train_ids, data_root),
+            "val": build_patient_cts(val_ids, data_root),
         }
 
-    data_dict["test"] = build_patient_pairs(test_ids, data_root)
+    data_dict["test"] = build_patient_cts(test_ids, data_root)
 
     if save:
         output_json.parent.mkdir(parents=True, exist_ok=True)
