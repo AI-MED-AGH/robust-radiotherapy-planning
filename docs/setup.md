@@ -10,27 +10,28 @@ This project uses `uv` to manage dependencies. In order to properly use the proj
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Once `uv` is installed it can be used to sync the `.venv` or `conda` environment of choice with `uv.lock`. The command used depends on if your installation is being done to `.venv` or directly to a Python installation:
+Once `uv` is installed it can be used to sync the `.venv` or a Python installation with `uv.lock`. The command used depends on where the sync happens:
 
 1. Syncing to a `.venv`:
 ```
 uv sync --python python
 ```
 
-2. Syncing directly to Python (useful for `conda`):
+2. Syncing directly to Python:
 ```
 uv pip sync pyproject.toml --python python --system
 ```
 
-**IMPORTANT**: NEVER sync to `base` when using `conda` as that can break the `conda` installation (`uv` will remove conda-specific packages).
+**IMPORTANT**: NEVER sync directly to Python when using `conda` as that can completely break the `conda` environment (`uv` will remove conda-specific packages).
 
-This project uses PyTorch. The default environment uses CPU, but for heavier code it is preferred to use GPU. The project directly manages a CUDA 12.8 PyTorch installation. This version may not work for everyone, so adding more versions can be discussed in the future. In order to install this version of PyTorch instead one should add the flag `--extra gpu`:
+This project uses PyTorch. The default environment uses CPU, but for heavier code it is preferred to use GPU. The project directly manages a CUDA 12.8 PyTorch installation. This may not work for everyone, so adding more versions can be discussed in the future. In order to install this version of PyTorch instead, one should add the flag `--extra gpu`:
+
 1. Syncing to a `.venv`:
 ```
 uv sync --python python --extra gpu
 ```
 
-2. Syncing directly to Python (useful for `conda`):
+2. Syncing directly to Python:
 ```
 uv pip sync pyproject.toml --python python --system --extra gpu
 ```
