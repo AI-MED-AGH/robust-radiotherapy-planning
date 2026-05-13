@@ -1,6 +1,6 @@
 # ROBUST-RADIOTHERAPY-PLANNING
 
-![Python](https://img.shields.io/badge/Python-3.11-lightgray?style=flat&logo=python)
+![Python](https://img.shields.io/badge/Python-3.11.15-lightgray?style=flat&logo=python)
 ![Status](https://img.shields.io/badge/Status-In_Progress-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 

@@ -2,11 +2,42 @@
 [project]
 name = "robust-radiotherapy-planning"
 version = "0.1.0"
-dynamic = ["dependencies"]
+requires-python = "==3.11.15"
+dependencies = [
+    "jupyter>=1.1.1,<2.0.0",
+    "matplotlib>=3.10.8,<4.0.0",
+    "mypy>=1.20.0,<2.0.0",
+    "nibabel>=5.4.2,<6.0.0",
+    "numpy>=2.4.4,<3.0.0",
+    "optuna>=4.8.0,<5.0.0",
+    "ruff>=0.15.9,<1.0.0",
+    "scikit-image>=0.26.0,<1.0.0",
+    "simpleitk>=2.5.3,<3.0.0",
+    "torch>=2.11.0,<3.0.0",
+    "torchvision>=0.26.0,<1.0.0",
+]
 
-[tool.setuptools.dynamic]
-# This tells pip to read dependencies directly from requirements.txt
-dependencies = { file = ["requirements.txt"] }
+# Allow for optionally installing the GPU version of PyTorch
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.11.0,<3.0.0",
+    "torchvision>=0.26.0,<1.0.0",
+]
+
+# Define the index for downloading GPU PyTorch
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# If the "gpu" extra is requested, get PyTorch from the GPU index
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", extra = "gpu" },
+]
+torchvision = [
+  { index = "pytorch-cu128", extra = "gpu" },
+]
 
 # Ruff configuration
 [tool.ruff]
@@ -16,6 +47,7 @@ line-length = 120
 # Include Jupyter Notebooks for Ruff
 extend-include = ["*.ipynb"]
 
+# Define which issues to flag
 [tool.ruff.lint]
 # E: Error, F: Pyflakes, I: Isort, UP: Pyupgrade, B: Bugbear
 select = ["E", "F", "I", "UP", "B"]
@@ -30,6 +62,7 @@ fixable = ["ALL"]
     "E501",
 ]
 
+# Force double quotes for Python strings
 [tool.ruff.format]
 quote-style = "double"
 
