@@ -1,0 +1,1 @@
+#To be created by Wiktoria. This file will contain the CLI implementation for the testing pipeline, allowing users to run the pipeline with different configurations and options.

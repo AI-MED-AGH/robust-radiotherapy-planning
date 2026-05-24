@@ -3,6 +3,7 @@ __pycache__/
 
 # Ignore the data and results directories
 /src/data_full/
+/src/pipeline/weights/
 /RESULTS/
 
 # Ignore files related to project setup
