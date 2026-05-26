@@ -4,8 +4,10 @@ name = "robust-radiotherapy-planning"
 version = "0.1.0"
 requires-python = "==3.11.15"
 dependencies = [
+    "einops>=0.8.2,<1.0.0",
     "jupyter>=1.1.1,<2.0.0",
     "matplotlib>=3.10.8,<4.0.0",
+    "monai>=1.5.2,<2.0.0",
     "mypy>=1.20.0,<2.0.0",
     "nibabel>=5.4.2,<6.0.0",
     "numpy>=2.4.4,<3.0.0",
@@ -15,6 +17,7 @@ dependencies = [
     "simpleitk>=2.5.3,<3.0.0",
     "torch>=2.11.0,<3.0.0",
     "torchvision>=0.26.0,<1.0.0",
+    "tqdm>=4.67.3,<5.0.0",
 ]
 
 # Allow for optionally installing the GPU version of PyTorch

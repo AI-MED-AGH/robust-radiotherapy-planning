@@ -18,5 +18,6 @@ __pycache__/
 # Ignore checkpoint files
 .ipynb_checkpoints/
 
-# Ignored saved data
+# Ignore notebook data
 /notebooks/data
+/notebooks/models
