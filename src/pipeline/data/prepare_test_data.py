@@ -101,17 +101,13 @@ def _extract_planning_ct_paths(data_path_list: list[str | dict[str, Any]]) -> li
         elif isinstance(item, dict):
             if "moving_image" not in item:
                 raise ValueError(
-                    "Expected dictionary item to contain key 'moving_image'. "
-                    f"Got keys: {list(item.keys())}"
+                    f"Expected dictionary item to contain key 'moving_image'. Got keys: {list(item.keys())}"
                 )
 
             path = item["moving_image"]
 
         else:
-            raise ValueError(
-                "Each test item must be either a string path or a dictionary. "
-                f"Got: {type(item)}"
-            )
+            raise ValueError(f"Each test item must be either a string path or a dictionary. Got: {type(item)}")
 
         if "fraction_1_" in path:
             planning_ct_paths.append(path)
@@ -172,10 +168,7 @@ def process_and_save_planning_cts(
     planning_ct_paths = _extract_planning_ct_paths(data_path_list)
 
     if len(planning_ct_paths) == 0:
-        raise ValueError(
-            "No planning CTs were found. Expected filenames containing "
-            "'fraction_1_'."
-        )
+        raise ValueError("No planning CTs were found. Expected filenames containing 'fraction_1_'.")
 
     for path in tqdm(planning_ct_paths, desc="Preparing planning CTs"):
         path = Path(path)
@@ -259,14 +252,10 @@ def prepare_test_data(
     )
 
     if "test" not in data_dict:
-        raise KeyError(
-            "The data dictionary does not contain a 'test' split"
-        )
+        raise KeyError("The data dictionary does not contain a 'test' split")
 
     if len(data_dict["test"]) == 0:
-        raise ValueError(
-            "The test split is empty. Cannot prepare MAISI test data"
-        )
+        raise ValueError("The test split is empty. Cannot prepare MAISI test data")
 
     process_and_save_planning_cts(
         config=config,

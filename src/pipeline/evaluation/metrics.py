@@ -96,9 +96,7 @@ def _to_numpy_01(tensor: torch.Tensor) -> np.ndarray:
     """
 
     if not isinstance(tensor, torch.Tensor):
-        raise TypeError(
-            f"`tensor` must be a torch.Tensor. Got {type(tensor)}"
-        )
+        raise TypeError(f"`tensor` must be a torch.Tensor. Got {type(tensor)}")
 
     if tensor.numel() == 0:
         raise ValueError("`tensor` cannot be empty")
@@ -154,9 +152,7 @@ def _extract_patient_id(path: str | Path) -> str:
     """
 
     if not isinstance(path, str | Path):
-        raise TypeError(
-            f"`path` must be a string or Path object. Got {type(path)}"
-        )
+        raise TypeError(f"`path` must be a string or Path object. Got {type(path)}")
 
     path = Path(path)
 
@@ -176,14 +172,10 @@ def _extract_patient_id(path: str | Path) -> str:
         patient_id = path.parent.name
 
     if patient_id == "":
-        raise ValueError(
-            f"Could not extract patient ID from path: {path}"
-        )
+        raise ValueError(f"Could not extract patient ID from path: {path}")
 
     if patient_id in {".", ".."}:
-        raise ValueError(
-            f"Invalid patient ID extracted from path: {path}"
-        )
+        raise ValueError(f"Invalid patient ID extracted from path: {path}")
 
     return patient_id
 
@@ -221,14 +213,10 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
 
     if not isinstance(pred, np.ndarray):
-        raise TypeError(
-            f"`pred` must be a NumPy array. Got {type(pred)}"
-        )
+        raise TypeError(f"`pred` must be a NumPy array. Got {type(pred)}")
 
     if not isinstance(ref, np.ndarray):
-        raise TypeError(
-            f"`ref` must be a NumPy array. Got {type(ref)}"
-        )
+        raise TypeError(f"`ref` must be a NumPy array. Got {type(ref)}")
 
     if pred.size == 0:
         raise ValueError("`pred` cannot be empty")
@@ -237,20 +225,13 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         raise ValueError("`ref` cannot be empty")
 
     if pred.ndim != 3:
-        raise ValueError(
-            f"`pred` must be a 3D array. Got shape {pred.shape}"
-        )
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
 
     if ref.ndim != 3:
-        raise ValueError(
-            f"`ref` must be a 3D array. Got shape {ref.shape}"
-        )
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(
-            f"`pred` and `ref` must have the same shape. "
-            f"Got {pred.shape} and {ref.shape}"
-        )
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
         raise ValueError("`pred` contains NaN or infinite values")
@@ -318,17 +299,13 @@ def sobel_edge_map_3d(arr: np.ndarray) -> np.ndarray:
     """
 
     if not isinstance(arr, np.ndarray):
-        raise TypeError(
-            f"`arr` must be a NumPy array. Got {type(arr)}"
-        )
+        raise TypeError(f"`arr` must be a NumPy array. Got {type(arr)}")
 
     if arr.size == 0:
         raise ValueError("`arr` cannot be empty")
 
     if arr.ndim != 3:
-        raise ValueError(
-            f"`arr` must be a 3D array. Got shape {arr.shape}"
-        )
+        raise ValueError(f"`arr` must be a 3D array. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
         raise ValueError("`arr` contains NaN or infinite values")
@@ -379,14 +356,10 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
 
     if not isinstance(pred, np.ndarray):
-        raise TypeError(
-            f"`pred` must be a NumPy array. Got {type(pred)}."
-        )
+        raise TypeError(f"`pred` must be a NumPy array. Got {type(pred)}.")
 
     if not isinstance(ref, np.ndarray):
-        raise TypeError(
-            f"`ref` must be a NumPy array. Got {type(ref)}."
-        )
+        raise TypeError(f"`ref` must be a NumPy array. Got {type(ref)}.")
 
     if pred.size == 0:
         raise ValueError("`pred` cannot be empty.")
@@ -395,20 +368,13 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         raise ValueError("`ref` cannot be empty.")
 
     if pred.ndim != 3:
-        raise ValueError(
-            f"`pred` must be a 3D array. Got shape {pred.shape}."
-        )
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
 
     if ref.ndim != 3:
-        raise ValueError(
-            f"`ref` must be a 3D array. Got shape {ref.shape}."
-        )
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
 
     if pred.shape != ref.shape:
-        raise ValueError(
-            f"`pred` and `ref` must have the same shape. "
-            f"Got {pred.shape} and {ref.shape}."
-        )
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
 
     if not np.isfinite(pred).all():
         raise ValueError("`pred` contains NaN or infinite values.")
@@ -464,26 +430,19 @@ def _center_slices_for_lpips(
     """
 
     if not isinstance(arr, np.ndarray):
-        raise TypeError(
-            f"`arr` must be a NumPy array. Got {type(arr)}"
-        )
+        raise TypeError(f"`arr` must be a NumPy array. Got {type(arr)}")
 
     if arr.size == 0:
         raise ValueError("`arr` cannot be empty.")
 
     if arr.ndim != 3:
-        raise ValueError(
-            f"`arr` must be a 3D array with shape [H, W, Z]. "
-            f"Got shape {arr.shape}"
-        )
+        raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
         raise ValueError("`arr` contains NaN or infinite values")
 
     if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError(
-            "`arr` must be normalized to [0, 1] before LPIPS calculation"
-        )
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
 
     if max_slices < 1:
         raise ValueError("`max_slices` must be at least 1")
@@ -589,10 +548,7 @@ def lpips_3d(
         raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(
-            f"`pred` and `ref` must have the same shape. "
-            f"Got {pred.shape} and {ref.shape}"
-        )
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
         raise ValueError("`pred` contains NaN or infinite values")
@@ -672,14 +628,10 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
     """
 
     if not isinstance(original_ct_dir, Path):
-        raise TypeError(
-            f"`original_ct_dir` must be a Path object. Got {type(original_ct_dir)}"
-        )
+        raise TypeError(f"`original_ct_dir` must be a Path object. Got {type(original_ct_dir)}")
 
     if not original_ct_dir.exists():
-        raise FileNotFoundError(
-            f"Original CT directory does not exist: {original_ct_dir}"
-        )
+        raise FileNotFoundError(f"Original CT directory does not exist: {original_ct_dir}")
 
     paths = sorted(
         glob.glob(
@@ -689,9 +641,7 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
     )
 
     if len(paths) == 0:
-        raise ValueError(
-            f"No original/reference CT `.pt` files found in: {original_ct_dir}"
-        )
+        raise ValueError(f"No original/reference CT `.pt` files found in: {original_ct_dir}")
 
     originals: dict[str, list[Path]] = {}
 
@@ -755,15 +705,10 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     """
 
     if not isinstance(generated_ct_dir, Path):
-        raise TypeError(
-            f"`generated_ct_dir` must be a Path object. "
-            f"Got {type(generated_ct_dir)}"
-        )
+        raise TypeError(f"`generated_ct_dir` must be a Path object. Got {type(generated_ct_dir)}")
 
     if not generated_ct_dir.exists():
-        raise FileNotFoundError(
-            f"Generated CT directory does not exist: {generated_ct_dir}"
-        )
+        raise FileNotFoundError(f"Generated CT directory does not exist: {generated_ct_dir}")
 
     paths = sorted(
         glob.glob(
@@ -773,9 +718,7 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     )
 
     if len(paths) == 0:
-        raise ValueError(
-            f"No generated CT `.pt` files found in: {generated_ct_dir}"
-        )
+        raise ValueError(f"No generated CT `.pt` files found in: {generated_ct_dir}")
 
     generated: dict[str, list[Path]] = {}
 
@@ -850,21 +793,13 @@ def calculate_similarity_metrics(
     """
 
     if not isinstance(generated_ct_dir, Path):
-        raise TypeError(
-            f"`generated_ct_dir` must be a Path object. "
-            f"Got {type(generated_ct_dir)}"
-        )
+        raise TypeError(f"`generated_ct_dir` must be a Path object. Got {type(generated_ct_dir)}")
 
     if not isinstance(original_ct_dir, Path):
-        raise TypeError(
-            f"`original_ct_dir` must be a Path object. "
-            f"Got {type(original_ct_dir)}"
-        )
+        raise TypeError(f"`original_ct_dir` must be a Path object. Got {type(original_ct_dir)}")
 
     if not isinstance(metrics_dir, Path):
-        raise TypeError(
-            f"`metrics_dir` must be a Path object. Got {type(metrics_dir)}"
-        )
+        raise TypeError(f"`metrics_dir` must be a Path object. Got {type(metrics_dir)}")
 
     if not isinstance(use_lpips, bool):
         raise TypeError(f"`use_lpips` must be bool. Got {type(use_lpips)}")
@@ -883,9 +818,7 @@ def calculate_similarity_metrics(
     generated = collect_generated_cts(generated_ct_dir)
     originals = collect_original_cts(original_ct_dir)
 
-    torch_device = torch.device(
-        device if device == "cuda" and torch.cuda.is_available() else "cpu"
-    )
+    torch_device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
 
     lpips_model = None
 
@@ -962,10 +895,7 @@ def calculate_similarity_metrics(
         index=False,
     )
 
-    summary = (
-        df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]]
-        .agg(["mean", "std", "min", "max", "count"])
-    )
+    summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
 
     summary.to_csv(
         metrics_dir / "generated_vs_real_summary.csv",
@@ -1067,9 +997,7 @@ def calculate_pairwise_variety_metrics(
 
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
-    torch_device = torch.device(
-        device if device == "cuda" and torch.cuda.is_available() else "cpu"
-    )
+    torch_device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
 
     lpips_model = None
 
@@ -1087,10 +1015,7 @@ def calculate_pairwise_variety_metrics(
 
     for patient_id, paths in tqdm(ct_groups.items(), desc=comparison_type):
         if len(paths) < 2:
-            print(
-                f"Skipping pairwise {comparison_type} for {patient_id}: "
-                f"only {len(paths)} image(s)."
-            )
+            print(f"Skipping pairwise {comparison_type} for {patient_id}: only {len(paths)} image(s).")
             continue
 
         for path_a, path_b in itertools.combinations(paths, 2):
@@ -1129,10 +1054,7 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        raise ValueError(
-            f"No valid pairwise comparisons were calculated for "
-            f"`{comparison_type}`."
-        )
+        raise ValueError(f"No valid pairwise comparisons were calculated for `{comparison_type}`.")
 
     df = pd.DataFrame(rows)
 
@@ -1141,10 +1063,7 @@ def calculate_pairwise_variety_metrics(
         index=False,
     )
 
-    summary = (
-        df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]]
-        .agg(["mean", "std", "min", "max", "count"])
-    )
+    summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
 
     summary_name = output_filename.replace(".csv", "_summary.csv")
     summary.to_csv(metrics_dir / summary_name)
@@ -1207,14 +1126,10 @@ def evaluate_generated_cts(
     """
 
     if not isinstance(generated_ct_dir, Path):
-        raise TypeError(
-            f"`generated_ct_dir` must be a Path. Got {type(generated_ct_dir)}"
-        )
+        raise TypeError(f"`generated_ct_dir` must be a Path. Got {type(generated_ct_dir)}")
 
     if not isinstance(original_ct_dir, Path):
-        raise TypeError(
-            f"`original_ct_dir` must be a Path. Got {type(original_ct_dir)}"
-        )
+        raise TypeError(f"`original_ct_dir` must be a Path. Got {type(original_ct_dir)}")
 
     if not isinstance(metrics_dir, Path):
         raise TypeError(f"`metrics_dir` must be a Path. Got {type(metrics_dir)}")

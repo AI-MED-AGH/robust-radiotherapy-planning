@@ -8,11 +8,11 @@ from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
     AutoencoderKlMaisi,
 )
 from monai.data import Dataset, ThreadDataLoader
-from monai.inferers import sliding_window_inference
 from monai.transforms import Compose, EnsureTyped, MapTransform
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.inference.sliding_window_inference import sliding_window_inference
 
 
 class LoadProcessedTensord(MapTransform):
@@ -51,9 +51,7 @@ class LoadProcessedTensord(MapTransform):
             tensor_path = Path(d[key])
 
             if not tensor_path.exists():
-                raise FileNotFoundError(
-                    f"Processed CT tensor does not exist: {tensor_path}"
-                )
+                raise FileNotFoundError(f"Processed CT tensor does not exist: {tensor_path}")
 
             d[key] = torch.load(tensor_path, weights_only=True)
 
@@ -97,15 +95,10 @@ def load_vae_model(
     """
 
     if config.vae_config is None:
-        raise ValueError(
-            "`config.vae_config` is None. The VAE configuration must be set "
-            "before loading the model"
-        )
+        raise ValueError("`config.vae_config` is None. The VAE configuration must be set before loading the model")
 
     if not config.vae_weight_path.exists():
-        raise FileNotFoundError(
-            f"VAE weight file does not exist: {config.vae_weight_path}"
-        )
+        raise FileNotFoundError(f"VAE weight file does not exist: {config.vae_weight_path}")
 
     vae_model = AutoencoderKlMaisi(**config.vae_config).to(device)
 
@@ -172,10 +165,7 @@ def build_processed_ct_loader(
         raise ValueError("`batch_size` must be at least 1")
 
     if not config.processed_ct_dir.exists():
-        raise FileNotFoundError(
-            f"Processed CT directory does not exist: "
-            f"{config.processed_ct_dir}"
-        )
+        raise FileNotFoundError(f"Processed CT directory does not exist: {config.processed_ct_dir}")
 
     config.latent_ct_dir.mkdir(parents=True, exist_ok=True)
 
@@ -200,9 +190,7 @@ def build_processed_ct_loader(
 
     if len(test_files) == 0:
         raise ValueError(
-            f"No processed CT `.pt` files found in: "
-            f"{config.processed_ct_dir}. "
-            "Run `prepare_test_data(config)` first"
+            f"No processed CT `.pt` files found in: {config.processed_ct_dir}. Run `prepare_test_data(config)` first"
         )
 
     dataset = Dataset(data=test_files, transform=transform)
@@ -288,15 +276,14 @@ def encode_latents(config: MaisiTestingConfig) -> None:
 
     with torch.no_grad():
         for batch in tqdm(loader, desc="Encoding planning CTs"):
-            image = batch["image"].to(device, non_blocking=True)
-
             encoded_ct = sliding_window_inference(
-                inputs=image,
-                roi_size=config.window_size_encoder,
-                sw_batch_size=config.sw_batch_size,
-                predictor=vae_encoder_wrapper,
-                overlap=config.overlap_ratio,
-                mode="gaussian",
+                image=batch["image"].to(device, non_blocking=True),
+                chunk_size=config.chunk_size_encoder,
+                halo_size=config.halo_encoder,
+                image_size=config.encoder_image_size,
+                model=vae_encoder_wrapper,
+                model_type="encoder",
+                factor=config.encoder_factor,
             )
 
             save_path = Path(batch["save_path"][0])

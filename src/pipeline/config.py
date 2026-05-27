@@ -172,15 +172,33 @@ class MaisiTestingConfig:
     # Inference config
     cts_per_patient: int = 1
     steps: int = 30
-    overlap_ratio: float = 0.5
-    sw_batch_size: int = 1
     latent_scale: float = 1.0
     device: str = "cuda"
 
     # MAISI-specific config
     spacing: tuple[float, float, float] = (1.171875, 1.171875, 3.0)
-    window_size_encoder: tuple[int, int, int] = (256, 256, 64)
-    window_size_decoder: tuple[int, int, int] = (64, 64, 16)
+
+    # Custom sliding-window inference
+    # Chunk size c means the sliding window is c x c x d,
+    # where d is the full image / latent depth.
+    chunk_size_encoder: int = 128
+    chunk_size_decoder: int = 32
+
+    # Halos allow the sliding window to be lossless.
+    halo_encoder: int = 8
+    halo_decoder: int = 2
+
+    # MAISI VAE spatial scaling factor.
+    # Encoder: image space -> latent space, /4
+    # Decoder: latent space -> image space, *4
+    encoder_factor: int = 4
+    decoder_factor: int = 4
+
+    # H/W size in the space where sliding is performed.
+    # Encoder receives CTs after preprocessing: 512 x 512 x 128.
+    # Decoder receives latents: 128 x 128 x 32.
+    encoder_image_size: int = 512
+    decoder_image_size: int = 128
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict | None = None
@@ -245,36 +263,23 @@ class MaisiTestingConfig:
         """
 
         if not self.data_root.exists():
-            raise FileNotFoundError(
-                f"Data root does not exist: {self.data_root}"
-            )
+            raise FileNotFoundError(f"Data root does not exist: {self.data_root}")
 
         if not self.ct_root.exists():
-            raise FileNotFoundError(
-                f"CT root does not exist: {self.ct_root}"
-            )
+            raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
         if not self.data_dict_path.exists():
-            raise FileNotFoundError(
-                f"Data split JSON does not exist: {self.data_dict_path}"
-            )
+            raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
 
         if not self.weights_dir.exists():
-            raise FileNotFoundError(
-                f"Weights directory does not exist: {self.weights_dir}"
-            )
+            raise FileNotFoundError(f"Weights directory does not exist: {self.weights_dir}")
 
         if not self.vae_weight_path.exists():
-            raise FileNotFoundError(
-                f"VAE weight file does not exist: {self.vae_weight_path}"
-            )
+            raise FileNotFoundError(f"VAE weight file does not exist: {self.vae_weight_path}")
 
         if not self.rflow_weight_path.exists():
-            raise FileNotFoundError(
-                f"Rectified flow weight file does not exist: "
-                f"{self.rflow_weight_path}"
-            )
-        
+            raise FileNotFoundError(f"Rectified flow weight file does not exist: {self.rflow_weight_path}")
+
     def _validate_inference_settings(self) -> None:
         """
         Validate basic inference and image-processing settings.
@@ -286,65 +291,41 @@ class MaisiTestingConfig:
         """
 
         if self.cts_per_patient < 1:
-            raise ValueError(
-                "`cts_per_patient` must be at least 1"
-            )
+            raise ValueError("`cts_per_patient` must be at least 1")
 
         if self.steps < 1:
-            raise ValueError(
-                "`steps` must be at least 1"
-            )
+            raise ValueError("`steps` must be at least 1")
 
         if not 0 <= self.overlap_ratio < 1:
-            raise ValueError(
-                "`overlap_ratio` must be in the range [0, 1)"
-            )
+            raise ValueError("`overlap_ratio` must be in the range [0, 1)")
 
         if self.sw_batch_size < 1:
-            raise ValueError(
-                "`sw_batch_size` must be at least 1"
-            )
+            raise ValueError("`sw_batch_size` must be at least 1")
 
         if self.latent_scale <= 0:
-            raise ValueError(
-                "`latent_scale` must be greater than 0"
-            )
+            raise ValueError("`latent_scale` must be greater than 0")
 
         if self.device not in {"cuda", "cpu"}:
-            raise ValueError(
-                "`device` must be either 'cuda' or 'cpu'"
-            )
+            raise ValueError("`device` must be either 'cuda' or 'cpu'")
 
         if len(self.spacing) != 3:
-            raise ValueError(
-                "`spacing` must contain exactly 3 values"
-            )
+            raise ValueError("`spacing` must contain exactly 3 values")
 
         if any(value <= 0 for value in self.spacing):
-            raise ValueError(
-                "All `spacing` values must be greater than 0"
-            )
+            raise ValueError("All `spacing` values must be greater than 0")
 
         if len(self.window_size_encoder) != 3:
-            raise ValueError(
-                "`window_size_encoder` must contain exactly 3 values"
-            )
+            raise ValueError("`window_size_encoder` must contain exactly 3 values")
 
         if len(self.window_size_decoder) != 3:
-            raise ValueError(
-                "`window_size_decoder` must contain exactly 3 values"
-            )
+            raise ValueError("`window_size_decoder` must contain exactly 3 values")
 
         if any(value <= 0 for value in self.window_size_encoder):
-            raise ValueError(
-                "All `window_size_encoder` values must be greater than 0"
-            )
+            raise ValueError("All `window_size_encoder` values must be greater than 0")
 
         if any(value <= 0 for value in self.window_size_decoder):
-            raise ValueError(
-                "All `window_size_decoder` values must be greater than 0"
-            )
-    
+            raise ValueError("All `window_size_decoder` values must be greater than 0")
+
     def _set_default_vae_config(self) -> None:
         """
         Set default MAISI VAE configuration if no custom config was provided.
