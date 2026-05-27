@@ -37,17 +37,12 @@ def parse_args() -> argparse.Namespace:
         - metrics_dir
     """
 
-    parser = argparse.ArgumentParser(
-        description="Run MAISI-based CT generation testing pipeline."
-    )
+    parser = argparse.ArgumentParser(description="Run MAISI-based CT generation testing pipeline.")
 
     parser.add_argument(
         "stage",
         choices=["prepare", "encode", "generate", "evaluate", "all"],
-        help=(
-            "Pipeline stage to run: "
-            "'prepare', 'encode', 'generate', 'evaluate', or 'all'"
-        ),
+        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', or 'all'"),
     )
 
     parser.add_argument(
