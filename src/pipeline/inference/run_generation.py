@@ -11,13 +11,13 @@ from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import (
     DiffusionModelUNetMaisi,
 )
 from monai.data import ThreadDataLoader
-from monai.inferers import sliding_window_inference
 from monai.networks.schedulers import RFlowScheduler
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.inference.encode_latents import _resolve_device, load_vae_model
+from src.pipeline.inference.sliding_window_inference import sliding_window_inference
 
 
 @dataclass
@@ -63,17 +63,12 @@ class PatientConditionDataset(Dataset):
         """
 
         if not self.root_dir.exists():
-            raise FileNotFoundError(
-                f"Latent CT directory does not exist: {self.root_dir}"
-            )
+            raise FileNotFoundError(f"Latent CT directory does not exist: {self.root_dir}")
 
         self.samples = sorted(glob.glob(str(self.root_dir / "*.pt")))
 
         if len(self.samples) == 0:
-            raise ValueError(
-                f"No latent `.pt` files found in: {self.root_dir}. "
-                "Run `encode_latents(config)` first"
-            )
+            raise ValueError(f"No latent `.pt` files found in: {self.root_dir}. Run `encode_latents(config)` first")
 
     def __len__(self) -> int:
         """
@@ -148,16 +143,10 @@ def load_rflow_model(
     """
 
     if config.rflow_config is None:
-        raise ValueError(
-            "`config.rflow_config` cannot be None. "
-            "Provide a valid rectified flow model configuration"
-        )
+        raise ValueError("`config.rflow_config` cannot be None. Provide a valid rectified flow model configuration")
 
     if not config.rflow_weight_path.exists():
-        raise FileNotFoundError(
-            f"Rectified flow checkpoint does not exist: "
-            f"{config.rflow_weight_path}"
-        )
+        raise FileNotFoundError(f"Rectified flow checkpoint does not exist: {config.rflow_weight_path}")
 
     model = DiffusionModelUNetMaisi(**config.rflow_config).to(device)
 
@@ -235,12 +224,13 @@ def decode_latent_to_ct(
     """
 
     reconstructed_ct = sliding_window_inference(
-        inputs=z_t,
-        roi_size=config.window_size_decoder,
-        sw_batch_size=config.sw_batch_size,
-        predictor=vae_model.decode,
-        overlap=config.overlap_ratio,
-        mode="gaussian",
+        image=z_t,
+        chunk_size=config.chunk_size_decoder,
+        halo_size=config.halo_decoder,
+        image_size=config.decoder_image_size,
+        model=vae_model.decode,
+        model_type="decoder",
+        factor=config.decoder_factor,
     )
 
     reconstructed_ct = torch.clamp(
@@ -293,9 +283,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         raise ValueError("`config.scheduler_config` cannot be None")
 
     if "base_img_size_numel" not in config.scheduler_config:
-        raise ValueError(
-            "`config.scheduler_config` must contain 'base_img_size_numel'"
-        )
+        raise ValueError("`config.scheduler_config` must contain 'base_img_size_numel'")
 
     config.generated_ct_dir.mkdir(parents=True, exist_ok=True)
 
@@ -337,19 +325,14 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
             filename = os.path.basename(condition_path[0])
 
             if "_fraction_" not in filename:
-                raise ValueError(
-                    f"Cannot extract patient ID from filename: {filename}"
-                )
+                raise ValueError(f"Cannot extract patient ID from filename: {filename}")
 
             patient_id = filename.split("_fraction_")[0]
             patient_dir = config.generated_ct_dir / patient_id
             patient_dir.mkdir(parents=True, exist_ok=True)
 
             for variant_idx in range(1, config.cts_per_patient + 1):
-                z_t = (
-                    torch.randn_like(condition_latent).to(device)
-                    * config.latent_scale
-                )
+                z_t = torch.randn_like(condition_latent).to(device) * config.latent_scale
 
                 for timestep in scheduler.timesteps:
                     timestep_tensor = torch.tensor([timestep], device=device)
