@@ -7,146 +7,146 @@ class MaisiTestingConfig:
     """
     Store configuration for the MAISI CT image-to-image testing pipeline.
 
-    This configuration is intended for testing/inference, not training.
+    This configuration is intended for testing and inference only.
 
-    Assumptions:
-    - This class lives in a Python file somewhere inside `src/`
+    Assumptions
+    -----------
+    - This class lives inside the `src/` package.
     - Full CT data is stored in:
         src/data_full/CT/Patient_x/...
     - Each patient folder contains longitudinal CT fractions:
         Patient_<id>_fraction_1_.nii.gz
         Patient_<id>_fraction_2_.nii.gz
         ...
-    - Fraction 1 is treated as the planning CT / conditioning CT
-    - The pipeline processes CTs, encodes them into latent representations,
-      generates synthetic CT variants, saves outputs, and computes metrics
+    - Fraction 1 is treated as the planning CT (conditioning CT).
+    - The pipeline preprocesses CTs, encodes them into latent
+    representations, generates synthetic CT variants using MAISI,
+    decodes generated latents back into image space, and evaluates
+    the generated outputs.
     - MAISI model weights are stored in:
         src/pipeline/weights/
 
-    Pipeline stages:
-    - Prepare CT data for MAISI-compatible inference
-    - Encode processed CTs into latent space using the VAE
-    - Generate CT variants using the rectified flow model
-    - Decode generated latents back into CT space
-    - Save generated CTs and evaluation metrics
+    Pipeline stages
+    ---------------
+    1. Prepare CT data for MAISI inference.
+    2. Encode CTs into latent space using the VAE.
+    3. Generate latent representations using the rectified flow model.
+    4. Decode generated latents into CT images.
+    5. Save generated outputs and evaluation metrics.
 
     Parameters
     ----------
     data_root : Path
-        Root directory containing full project data.
-        Defaults to:
-        src/data_full
+        Root directory containing project data.
 
     ct_root : Path
         Directory containing patient CT folders.
-        Defaults to:
-        src/data_full/CT
 
     data_dict_path : Path
-        Path to the data split JSON file.
-        Defaults to:
-        src/data_full/data_dict.json
+        Path to the dataset split JSON file.
 
     output_root : Path
-        Root directory for all MAISI testing outputs.
-        Defaults to:
-        RESULTS/MAISI_TESTING
+        Root directory for all pipeline outputs.
 
     processed_ct_dir : Path
-        Directory where preprocessed CT tensors/images are saved.
-        Defaults to:
-        RESULTS/MAISI_TESTING/processed_ct/test
+        Directory containing preprocessed CT data.
 
     latent_ct_dir : Path
-        Directory where encoded CT latent representations are saved.
-        Defaults to:
-        RESULTS/MAISI_TESTING/latents/test
+        Directory containing encoded latent representations.
 
     generated_ct_dir : Path
-        Directory where generated CT images are saved.
-        Defaults to:
-        RESULTS/MAISI_TESTING/generated_ct/test
+        Directory containing generated CT images.
 
     metrics_dir : Path
-        Directory where metric outputs are saved.
-        Defaults to:
-        RESULTS/MAISI_TESTING/metrics
+        Directory containing evaluation metrics.
 
     logs_dir : Path
-        Directory where logs are saved.
-        Defaults to:
-        RESULTS/MAISI_TESTING/logs
+        Directory containing pipeline logs.
 
     weights_dir : Path
         Directory containing MAISI model weights.
-        Defaults to:
-        src/pipeline/weights
 
     vae_weight_path : Path
-        Path to the MAISI VAE / autoencoder weights.
-        Defaults to:
-        src/pipeline/weights/autoencoder_v1.pt
+        Path to the MAISI VAE checkpoint.
 
     rflow_weight_path : Path
-        Path to the MAISI rectified flow U-Net weights.
-        Defaults to:
-        src/pipeline/weights/diff_unet_3d_rflow-ct.pt
+        Path to the MAISI rectified flow checkpoint.
 
     cts_per_patient : int
-        Number of generated CT variants to create per patient.
+        Number of synthetic CTs generated per patient.
 
     steps : int
-        Number of sampling steps used during generation.
-
-    overlap_ratio : float
-        Overlap ratio used in sliding-window inference.
-
-    sw_batch_size : int
-        Sliding-window batch size.
+        Number of rectified-flow sampling steps.
 
     latent_scale : float
         Scaling factor applied to latent representations.
 
     device : str
-        Device used for inference.
-        Usually one of:
-        "cuda", "cpu"
+        Device used during inference (e.g. "cuda" or "cpu").
 
     spacing : tuple[float, float, float]
-        Target voxel spacing used by the pipeline.
+        Target voxel spacing used during preprocessing.
 
-    window_size_encoder : tuple[int, int, int]
-        Sliding-window ROI size used during VAE encoding.
+    chunk_size_encoder : int
+        Core sliding-window chunk size used during VAE encoding.
 
-    window_size_decoder : tuple[int, int, int]
-        Sliding-window ROI size used during VAE decoding.
+    chunk_size_decoder : int
+        Core sliding-window chunk size used during VAE decoding.
+
+    halo_encoder : int
+        Halo size added around encoder chunks to reduce boundary artifacts.
+
+    halo_decoder : int
+        Halo size added around decoder chunks to reduce boundary artifacts.
+
+    encoder_factor : int
+        Spatial scaling factor of the VAE encoder.
+        Converts image space to latent space.
+
+    decoder_factor : int
+        Spatial scaling factor of the VAE decoder.
+        Converts latent space back to image space.
+
+    encoder_image_size : int
+        Height and width of the encoder input image space on which
+        sliding-window inference is performed.
+
+    decoder_image_size : int
+        Height and width of the decoder latent space on which
+        sliding-window inference is performed.
 
     vae_config : dict | None
-        Model configuration dictionary for the VAE.
-        If None, a default MAISI-compatible configuration is used.
+        VAE architecture configuration.
+        If None, a default MAISI configuration is used.
 
     rflow_config : dict | None
-        Model configuration dictionary for the rectified flow U-Net.
-        If None, a default MAISI-compatible configuration is used.
+        Rectified flow U-Net configuration.
+        If None, a default MAISI configuration is used.
 
     scheduler_config : dict | None
-        Scheduler configuration dictionary used during sampling.
-        If None, a default scheduler configuration is used.
+        Sampling scheduler configuration.
+        If None, a default configuration is used.
+
+    validate_paths : bool
+        Whether filesystem paths should be validated during initialization.
 
     Raises
     ------
     FileNotFoundError
-        If required input paths or model weight files do not exist.
+        If required input data or model checkpoints are missing.
 
     ValueError
-        If selected inference parameters are invalid.
+        If inference parameters are invalid.
 
     Notes
     -----
-    This class creates output directories automatically in `__post_init__`.
+    The pipeline uses a custom sliding-window implementation based on
+    chunk extraction with halo overlap. The depth dimension is processed
+    as a whole, while sliding is performed only across height and width.
 
-    It does not load models or data by itself. It only stores and validates
-    configuration values used by the testing pipeline.
+    Output directories are automatically created during initialization.
+    This class stores and validates configuration values only and does
+    not load data or models.
     """
 
     # Input data
@@ -296,12 +296,6 @@ class MaisiTestingConfig:
         if self.steps < 1:
             raise ValueError("`steps` must be at least 1")
 
-        if not 0 <= self.overlap_ratio < 1:
-            raise ValueError("`overlap_ratio` must be in the range [0, 1)")
-
-        if self.sw_batch_size < 1:
-            raise ValueError("`sw_batch_size` must be at least 1")
-
         if self.latent_scale <= 0:
             raise ValueError("`latent_scale` must be greater than 0")
 
@@ -314,17 +308,50 @@ class MaisiTestingConfig:
         if any(value <= 0 for value in self.spacing):
             raise ValueError("All `spacing` values must be greater than 0")
 
-        if len(self.window_size_encoder) != 3:
-            raise ValueError("`window_size_encoder` must contain exactly 3 values")
+        if self.chunk_size_encoder <= 0:
+            raise ValueError("`chunk_size_encoder` must be greater than 0")
 
-        if len(self.window_size_decoder) != 3:
-            raise ValueError("`window_size_decoder` must contain exactly 3 values")
+        if self.chunk_size_decoder <= 0:
+            raise ValueError("`chunk_size_decoder` must be greater than 0")
 
-        if any(value <= 0 for value in self.window_size_encoder):
-            raise ValueError("All `window_size_encoder` values must be greater than 0")
+        if self.halo_encoder < 0:
+            raise ValueError("`halo_encoder` must be non-negative")
 
-        if any(value <= 0 for value in self.window_size_decoder):
-            raise ValueError("All `window_size_decoder` values must be greater than 0")
+        if self.halo_decoder < 0:
+            raise ValueError("`halo_decoder` must be non-negative")
+
+        if self.encoder_factor <= 0:
+            raise ValueError("`encoder_factor` must be greater than 0")
+
+        if self.decoder_factor <= 0:
+            raise ValueError("`decoder_factor` must be greater than 0")
+
+        if self.encoder_image_size <= 0:
+            raise ValueError("`encoder_image_size` must be greater than 0")
+
+        if self.decoder_image_size <= 0:
+            raise ValueError("`decoder_image_size` must be greater than 0")
+
+        if self.encoder_image_size % self.chunk_size_encoder != 0:
+            raise ValueError(
+                "`encoder_image_size` must be divisible by `chunk_size_encoder`. "
+                f"Got encoder_image_size={self.encoder_image_size}, "
+                f"chunk_size_encoder={self.chunk_size_encoder}"
+            )
+
+        if self.decoder_image_size % self.chunk_size_decoder != 0:
+            raise ValueError(
+                "`decoder_image_size` must be divisible by `chunk_size_decoder`. "
+                f"Got decoder_image_size={self.decoder_image_size}, "
+                f"chunk_size_decoder={self.chunk_size_decoder}"
+            )
+
+        if self.chunk_size_encoder % self.encoder_factor != 0:
+            raise ValueError(
+                "`chunk_size_encoder` must be divisible by `encoder_factor`. "
+                f"Got chunk_size_encoder={self.chunk_size_encoder}, "
+                f"encoder_factor={self.encoder_factor}"
+            )
 
     def _set_default_vae_config(self) -> None:
         """
