@@ -96,16 +96,10 @@ def _to_numpy_01(tensor: torch.Tensor) -> FloatArray:
 
     Raises
     ------
-    TypeError
-        If `tensor` is not a torch.Tensor.
-
     ValueError
         If `tensor` is empty.
         If `tensor` contains NaN or infinite values.
     """
-
-    if not isinstance(tensor, torch.Tensor):
-        raise TypeError(f"`tensor` must be a torch.Tensor. Got {type(tensor)}")
 
     if tensor.numel() == 0:
         raise ValueError("`tensor` cannot be empty")
@@ -152,16 +146,10 @@ def _extract_patient_id(path: str | Path) -> str:
 
     Raises
     ------
-    TypeError
-        If `path` is not a string or Path object.
-
     ValueError
         If `path` is empty.
         If patient ID cannot be extracted from the filename or parent folder.
     """
-
-    if not isinstance(path, str | Path):
-        raise TypeError(f"`path` must be a string or Path object. Got {type(path)}")
 
     path = Path(path)
 
@@ -211,21 +199,12 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
 
     Raises
     ------
-    TypeError
-        If `pred` or `ref` is not a NumPy array.
-
     ValueError
         If `pred` or `ref` is empty.
         If `pred` and `ref` have different shapes.
         If `pred` or `ref` is not 3-dimensional.
         If `pred` or `ref` contains NaN or infinite values.
     """
-
-    if not isinstance(pred, np.ndarray):
-        raise TypeError(f"`pred` must be a NumPy array. Got {type(pred)}")
-
-    if not isinstance(ref, np.ndarray):
-        raise TypeError(f"`ref` must be a NumPy array. Got {type(ref)}")
 
     if pred.size == 0:
         raise ValueError("`pred` cannot be empty")
@@ -253,8 +232,33 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
 
 def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
-    Slice-wise SSIM averaged over the z dimension.
-    Assumes arrays are normalized to [0, 1].
+    Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
+
+    This function computes SSIM slice-by-slice along the z-axis and returns
+    the average score across all slices. It is intended for comparing
+    volumetric medical images such as CT scans while using the standard
+    2D SSIM implementation.
+
+    Both input arrays are assumed to be normalized to the range [0, 1].
+
+    Parameters
+    ----------
+    pred : np.ndarray
+        Predicted 3D image array.
+
+    ref : np.ndarray
+        Reference (ground-truth) 3D image array.
+
+    Returns
+    -------
+    score : float
+        Mean SSIM score averaged across all z-axis slices.
+        Values closer to 1 indicate higher structural similarity.
+
+    Raises
+    ------
+    ValueError
+        If `pred` and `ref` do not have the same shape.
     """
 
     if pred.shape != ref.shape:
@@ -301,17 +305,11 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
 
     Raises
     ------
-    TypeError
-        If `arr` is not a NumPy array.
-
     ValueError
         If `arr` is empty.
         If `arr` is not 3-dimensional.
         If `arr` contains NaN or infinite values.
     """
-
-    if not isinstance(arr, np.ndarray):
-        raise TypeError(f"`arr` must be a NumPy array. Got {type(arr)}")
 
     if arr.size == 0:
         raise ValueError("`arr` cannot be empty")
@@ -357,21 +355,12 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
 
     Raises
     ------
-    TypeError
-        If `pred` or `ref` is not a NumPy array.
-
     ValueError
         If `pred` or `ref` is empty.
         If `pred` or `ref` is not 3-dimensional.
         If `pred` and `ref` have different shapes.
         If `pred` or `ref` contains NaN or infinite values.
     """
-
-    if not isinstance(pred, np.ndarray):
-        raise TypeError(f"`pred` must be a NumPy array. Got {type(pred)}.")
-
-    if not isinstance(ref, np.ndarray):
-        raise TypeError(f"`ref` must be a NumPy array. Got {type(ref)}.")
 
     if pred.size == 0:
         raise ValueError("`pred` cannot be empty.")
@@ -430,9 +419,6 @@ def _center_slices_for_lpips(
 
     Raises
     ------
-    TypeError
-        If `arr` is not a NumPy array.
-
     ValueError
         If `arr` is empty.
         If `arr` is not 3-dimensional.
@@ -440,9 +426,6 @@ def _center_slices_for_lpips(
         If `arr` is not normalized to [0, 1].
         If `max_slices` is less than 1.
     """
-
-    if not isinstance(arr, np.ndarray):
-        raise TypeError(f"`arr` must be a NumPy array. Got {type(arr)}")
 
     if arr.size == 0:
         raise ValueError("`arr` cannot be empty.")
@@ -525,10 +508,6 @@ def lpips_3d(
 
     Raises
     ------
-    TypeError
-        If `pred` or `ref` is not a NumPy array.
-        If `device` is not a torch.device.
-
     ValueError
         If `pred` or `ref` is empty.
         If `pred` or `ref` is not 3-dimensional.
@@ -537,15 +516,6 @@ def lpips_3d(
         If `pred` or `ref` is not normalized to [0, 1].
         If `max_slices` is less than 1.
     """
-
-    if not isinstance(pred, np.ndarray):
-        raise TypeError(f"`pred` must be a NumPy array. Got {type(pred)}")
-
-    if not isinstance(ref, np.ndarray):
-        raise TypeError(f"`ref` must be a NumPy array. Got {type(ref)}")
-
-    if not isinstance(device, torch.device):
-        raise TypeError(f"`device` must be a torch.device. Got {type(device)}")
 
     if pred.size == 0:
         raise ValueError("`pred` cannot be empty")
@@ -629,18 +599,12 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
 
     Raises
     ------
-    TypeError
-        If `original_ct_dir` is not a Path object.
-
     FileNotFoundError
         If `original_ct_dir` does not exist.
 
     ValueError
         If no `.pt` files are found in `original_ct_dir`.
     """
-
-    if not isinstance(original_ct_dir, Path):
-        raise TypeError(f"`original_ct_dir` must be a Path object. Got {type(original_ct_dir)}")
 
     if not original_ct_dir.exists():
         raise FileNotFoundError(f"Original CT directory does not exist: {original_ct_dir}")
@@ -706,18 +670,12 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
 
     Raises
     ------
-    TypeError
-        If `generated_ct_dir` is not a Path object.
-
     FileNotFoundError
         If `generated_ct_dir` does not exist.
 
     ValueError
         If no generated CT `.pt` files are found in `generated_ct_dir`.
     """
-
-    if not isinstance(generated_ct_dir, Path):
-        raise TypeError(f"`generated_ct_dir` must be a Path object. Got {type(generated_ct_dir)}")
 
     if not generated_ct_dir.exists():
         raise FileNotFoundError(f"Generated CT directory does not exist: {generated_ct_dir}")
@@ -794,33 +752,10 @@ def calculate_similarity_metrics(
 
     Raises
     ------
-    TypeError
-        If path arguments are not Path objects.
-        If `use_lpips` is not bool.
-        If `lpips_net` or `device` is not a string.
-
     ValueError
         If `max_lpips_slices` is less than 1.
         If no valid comparisons can be calculated.
     """
-
-    if not isinstance(generated_ct_dir, Path):
-        raise TypeError(f"`generated_ct_dir` must be a Path object. Got {type(generated_ct_dir)}")
-
-    if not isinstance(original_ct_dir, Path):
-        raise TypeError(f"`original_ct_dir` must be a Path object. Got {type(original_ct_dir)}")
-
-    if not isinstance(metrics_dir, Path):
-        raise TypeError(f"`metrics_dir` must be a Path object. Got {type(metrics_dir)}")
-
-    if not isinstance(use_lpips, bool):
-        raise TypeError(f"`use_lpips` must be bool. Got {type(use_lpips)}")
-
-    if not isinstance(lpips_net, str):
-        raise TypeError(f"`lpips_net` must be str. Got {type(lpips_net)}")
-
-    if not isinstance(device, str):
-        raise TypeError(f"`device` must be str. Got {type(device)}")
 
     if max_lpips_slices < 1:
         raise ValueError("`max_lpips_slices` must be at least 1")
@@ -967,9 +902,6 @@ def calculate_pairwise_variety_metrics(
 
     Raises
     ------
-    TypeError
-        If arguments have invalid types.
-
     ValueError
         If `ct_groups` is empty.
         If `output_filename` does not end with ".csv".
@@ -977,32 +909,8 @@ def calculate_pairwise_variety_metrics(
         If no valid pairwise comparisons can be calculated.
     """
 
-    if not isinstance(ct_groups, dict):
-        raise TypeError(f"`ct_groups` must be a dictionary. Got {type(ct_groups)}")
-
-    if not isinstance(metrics_dir, Path):
-        raise TypeError(f"`metrics_dir` must be a Path. Got {type(metrics_dir)}")
-
-    if not isinstance(output_filename, str):
-        raise TypeError(f"`output_filename` must be str. Got {type(output_filename)}")
-
-    if not isinstance(comparison_type, str):
-        raise TypeError(f"`comparison_type` must be str. Got {type(comparison_type)}")
-
-    if not isinstance(use_lpips, bool):
-        raise TypeError(f"`use_lpips` must be bool. Got {type(use_lpips)}")
-
-    if not isinstance(lpips_net, str):
-        raise TypeError(f"`lpips_net` must be str. Got {type(lpips_net)}")
-
-    if not isinstance(device, str):
-        raise TypeError(f"`device` must be str. Got {type(device)}")
-
     if len(ct_groups) == 0:
         raise ValueError("`ct_groups` cannot be empty")
-
-    if not output_filename.endswith(".csv"):
-        raise ValueError("`output_filename` must end with '.csv'")
 
     if max_lpips_slices < 1:
         raise ValueError("`max_lpips_slices` must be at least 1")
@@ -1125,32 +1033,12 @@ def evaluate_generated_cts(
 
     Raises
     ------
-    TypeError
-        If path arguments are not Path objects.
-        If `use_lpips` is not bool.
-        If `device` is not str.
-
     FileNotFoundError
         If generated or original CT directories do not exist.
 
     ValueError
         If no valid comparisons can be calculated.
     """
-
-    if not isinstance(generated_ct_dir, Path):
-        raise TypeError(f"`generated_ct_dir` must be a Path. Got {type(generated_ct_dir)}")
-
-    if not isinstance(original_ct_dir, Path):
-        raise TypeError(f"`original_ct_dir` must be a Path. Got {type(original_ct_dir)}")
-
-    if not isinstance(metrics_dir, Path):
-        raise TypeError(f"`metrics_dir` must be a Path. Got {type(metrics_dir)}")
-
-    if not isinstance(use_lpips, bool):
-        raise TypeError(f"`use_lpips` must be bool. Got {type(use_lpips)}")
-
-    if not isinstance(device, str):
-        raise TypeError(f"`device` must be str. Got {type(device)}")
 
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
