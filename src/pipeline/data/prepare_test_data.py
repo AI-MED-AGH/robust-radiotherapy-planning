@@ -1,9 +1,8 @@
-import os
 from pathlib import Path
 from typing import Any
 
 import torch
-from monai.transforms import (
+from monai.transforms import (  # type: ignore[attr-defined]
     CenterSpatialCropd,
     Compose,
     EnsureChannelFirstd,
@@ -170,8 +169,8 @@ def process_and_save_planning_cts(
     if len(planning_ct_paths) == 0:
         raise ValueError("No planning CTs were found. Expected filenames containing 'fraction_1_'.")
 
-    for path in tqdm(planning_ct_paths, desc="Preparing planning CTs"):
-        path = Path(path)
+    for path_raw in tqdm(planning_ct_paths, desc="Preparing planning CTs"):
+        path = Path(path_raw)
 
         if not path.exists():
             raise FileNotFoundError(f"Planning CT file does not exist: {path}")
@@ -179,7 +178,7 @@ def process_and_save_planning_cts(
         transformed = transform({"image": str(path)})
         tensor_data = transformed["image"]
 
-        original_name = os.path.basename(str(path)).replace(".nii.gz", ".pt")
+        original_name = path.name.replace(".nii.gz", ".pt")
         save_path = output_dir / original_name
 
         clean_tensor = tensor_data.as_tensor().clone().detach()

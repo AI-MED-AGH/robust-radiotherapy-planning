@@ -1,14 +1,14 @@
 import glob
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
     AutoencoderKlMaisi,
 )
-from monai.data import Dataset, ThreadDataLoader
-from monai.transforms import Compose, EnsureTyped, MapTransform
+from monai.data import Dataset, ThreadDataLoader  # type: ignore[attr-defined]
+from monai.transforms import Compose, EnsureTyped, MapTransform  # type: ignore[attr-defined]
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
@@ -48,12 +48,13 @@ class LoadProcessedTensord(MapTransform):
         d = dict(data)
 
         for key in self.keys:
-            tensor_path = Path(d[key])
+            key_str = cast(str, key)
+            tensor_path = Path(d[key_str])
 
             if not tensor_path.exists():
                 raise FileNotFoundError(f"Processed CT tensor does not exist: {tensor_path}")
 
-            d[key] = torch.load(tensor_path, weights_only=True)
+            d[key_str] = torch.load(tensor_path, weights_only=True)
 
         return d
 

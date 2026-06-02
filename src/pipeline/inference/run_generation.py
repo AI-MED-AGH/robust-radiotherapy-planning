@@ -2,6 +2,7 @@ import glob
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 import torch
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
@@ -10,9 +11,9 @@ from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
 from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import (
     DiffusionModelUNetMaisi,
 )
-from monai.data import ThreadDataLoader
-from monai.networks.schedulers import RFlowScheduler
-from torch.utils.data import Dataset
+from monai.data import ThreadDataLoader  # type: ignore[attr-defined]
+from monai.networks.schedulers import RFlowScheduler  # type: ignore[attr-defined]
+from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
@@ -21,7 +22,7 @@ from src.pipeline.inference.sliding_window_inference import sliding_window_infer
 
 
 @dataclass
-class PatientConditionDataset(Dataset):
+class PatientConditionDataset(TorchDataset[tuple[torch.Tensor, str]]):
     """
     Dataset for loading latent planning CT condition tensors.
 
@@ -299,7 +300,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     dataset = PatientConditionDataset(config.latent_ct_dir)
 
     loader = ThreadDataLoader(
-        dataset,
+        cast(Any, dataset),
         batch_size=1,
         shuffle=False,
         pin_memory=device.type == "cuda",

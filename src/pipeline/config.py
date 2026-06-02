@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -201,9 +202,9 @@ class MaisiTestingConfig:
     decoder_image_size: int = 128
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
-    vae_config: dict | None = None
-    rflow_config: dict | None = None
-    scheduler_config: dict | None = None
+    vae_config: dict[str, Any] | None = None
+    rflow_config: dict[str, Any] | None = None
+    scheduler_config: dict[str, Any] | None = None
 
     # Validation settings
     validate_paths: bool = True

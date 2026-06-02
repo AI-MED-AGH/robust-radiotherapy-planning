@@ -76,6 +76,10 @@ quote-style = "double"
 python_version = "3.11"
 strict = true
 
+[[tool.mypy.overrides]]
+module = ["lpips"]
+ignore_missing_imports = true
+
 # Explicitly exclude the notebooks directory from type checking
 exclude = [
     "^build/",
@@ -84,3 +88,10 @@ exclude = [
 
 # Standard stability settings
 warn_unused_configs = true
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=3.0.3.260530",
+    "scipy-stubs>=1.17.1.5",
+    "types-tqdm>=4.67.3.20260518",
+]

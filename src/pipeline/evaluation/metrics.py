@@ -1,8 +1,10 @@
 import glob
 import itertools
 from pathlib import Path
+from typing import Any, Protocol, cast
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import torch
 from scipy.ndimage import sobel
@@ -60,10 +62,15 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
     if tensor.ndim == 4:
         tensor = tensor[0]
 
-    return tensor.cpu()
+    return cast(torch.Tensor, tensor.cpu())
 
 
-def _to_numpy_01(tensor: torch.Tensor) -> np.ndarray:
+FloatArray = npt.NDArray[np.floating[Any]]
+class LPIPSModel(Protocol):
+    def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
+
+
+def _to_numpy_01(tensor: torch.Tensor) -> FloatArray:
     """
     Convert a CT tensor to a NumPy array normalized to the range [0, 1].
 
@@ -111,10 +118,10 @@ def _to_numpy_01(tensor: torch.Tensor) -> np.ndarray:
         return arr
 
     # Case 2: HU-like range [-1000, 1000]
-    arr = np.clip(arr, -1000, 1000)
-    arr = (arr + 1000) / 2000
+    arr = np.clip(arr, -1000, 1000).astype(np.float32)
+    arr = ((arr + 1000) / 2000).astype(np.float32)
 
-    return arr.astype(np.float32)
+    return arr
 
 
 def _extract_patient_id(path: str | Path) -> str:
@@ -257,17 +264,20 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         pred_slice = pred[:, :, z]
         ref_slice = ref[:, :, z]
 
-        score = ssim(
-            ref_slice,
-            pred_slice,
-            data_range=1.0,
+        score = cast(
+            float,
+            ssim(  # type: ignore[no-untyped-call]
+                ref_slice,
+                pred_slice,
+                data_range=1.0,
+            ),
         )
         scores.append(score)
 
     return float(np.mean(scores))
 
 
-def sobel_edge_map_3d(arr: np.ndarray) -> np.ndarray:
+def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
     """
     Calculate a 3D Sobel edge magnitude map.
 
@@ -316,7 +326,7 @@ def sobel_edge_map_3d(arr: np.ndarray) -> np.ndarray:
 
     edge = np.sqrt(sx**2 + sy**2 + sz**2)
 
-    return edge.astype(np.float32)
+    return cast(FloatArray, edge.astype(np.float32))
 
 
 def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
@@ -471,7 +481,7 @@ def _center_slices_for_lpips(
 def lpips_3d(
     pred: np.ndarray,
     ref: np.ndarray,
-    lpips_model,
+    lpips_model: LPIPSModel,
     device: torch.device,
     max_slices: int = 16,
 ) -> float:

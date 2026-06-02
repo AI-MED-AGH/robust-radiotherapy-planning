@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import torch
 
 
@@ -150,7 +152,7 @@ def sliding_window_inference(
     chunk_size: int,
     halo_size: int,
     image_size: int,
-    model,
+    model: Callable[[torch.Tensor], torch.Tensor],
     model_type: str,
     factor: int,
 ) -> torch.Tensor:
