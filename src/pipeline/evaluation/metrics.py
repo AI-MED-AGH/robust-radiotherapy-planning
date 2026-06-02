@@ -66,6 +66,8 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
 
 
 FloatArray = npt.NDArray[np.floating[Any]]
+
+
 class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
