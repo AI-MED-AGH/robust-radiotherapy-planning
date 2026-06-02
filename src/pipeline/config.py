@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import torch
 
 
 @dataclass
@@ -100,13 +102,9 @@ class MaisiTestingConfig:
     halo_decoder : int
         Halo size added around decoder chunks to reduce boundary artifacts.
 
-    encoder_factor : int
+    encoder_decoder_factor : int
         Spatial scaling factor of the VAE encoder.
         Converts image space to latent space.
-
-    decoder_factor : int
-        Spatial scaling factor of the VAE decoder.
-        Converts latent space back to image space.
 
     encoder_image_size : int
         Height and width of the encoder input image space on which
@@ -150,31 +148,31 @@ class MaisiTestingConfig:
     not load data or models.
     """
 
-    # Input data
+    # Data paths
     data_root: Path = Path("src/data_full")
-    ct_root: Path = Path("src/data_full/CT")
-    data_dict_path: Path = Path("src/data_full/data_dict.json")
+    ct_root: Path = data_root / "CT"
+    data_dict_path: Path = data_root / "data_dict.json"
 
-    # Data/output paths
+    # Output paths
     output_root: Path = Path("RESULTS/MAISI_TESTING")
 
-    processed_ct_dir: Path = Path("RESULTS/MAISI_TESTING/processed_ct/test")
-    latent_ct_dir: Path = Path("RESULTS/MAISI_TESTING/latents/test")
-    generated_ct_dir: Path = Path("RESULTS/MAISI_TESTING/generated_ct/test")
-    metrics_dir: Path = Path("RESULTS/MAISI_TESTING/metrics")
-    logs_dir: Path = Path("RESULTS/MAISI_TESTING/logs")
+    processed_ct_dir: Path = output_root / "processed_ct" / "test"
+    latent_ct_dir: Path = output_root / "latents" / "test"
+    generated_ct_dir: Path = output_root / "generated_ct" / "test"
+    metrics_dir: Path = output_root / "metrics"
+    logs_dir: Path = output_root / "logs"
 
     # Model weights
     weights_dir: Path = Path("src/pipeline/weights")
 
-    vae_weight_path: Path = Path("src/pipeline/weights/autoencoder_v1.pt")
-    rflow_weight_path: Path = Path("src/pipeline/weights/diff_unet_3d_rflow-ct.pt")
+    vae_weight_path: Path = weights_dir / "autoencoder_v1.pt"
+    rflow_weight_path: Path = weights_dir / "diff_unet_3d_rflow-ct.pt"
 
     # Inference config
     cts_per_patient: int = 1
     steps: int = 30
     latent_scale: float = 1.0
-    device: str = "cuda"
+    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
 
     # MAISI-specific config
     spacing: tuple[float, float, float] = (1.171875, 1.171875, 3.0)
@@ -192,8 +190,7 @@ class MaisiTestingConfig:
     # MAISI VAE spatial scaling factor.
     # Encoder: image space -> latent space, /4
     # Decoder: latent space -> image space, *4
-    encoder_factor: int = 4
-    decoder_factor: int = 4
+    encoder_decoder_factor: int = 4
 
     # H/W size in the space where sliding is performed.
     # Encoder receives CTs after preprocessing: 512 x 512 x 128.
@@ -321,11 +318,8 @@ class MaisiTestingConfig:
         if self.halo_decoder < 0:
             raise ValueError("`halo_decoder` must be non-negative")
 
-        if self.encoder_factor <= 0:
-            raise ValueError("`encoder_factor` must be greater than 0")
-
-        if self.decoder_factor <= 0:
-            raise ValueError("`decoder_factor` must be greater than 0")
+        if self.encoder_decoder_factor <= 0:
+            raise ValueError("`encoder_decoder_factor` must be greater than 0")
 
         if self.encoder_image_size <= 0:
             raise ValueError("`encoder_image_size` must be greater than 0")
@@ -347,11 +341,11 @@ class MaisiTestingConfig:
                 f"chunk_size_decoder={self.chunk_size_decoder}"
             )
 
-        if self.chunk_size_encoder % self.encoder_factor != 0:
+        if self.chunk_size_encoder % self.encoder_decoder_factor != 0:
             raise ValueError(
-                "`chunk_size_encoder` must be divisible by `encoder_factor`. "
+                "`chunk_size_encoder` must be divisible by `encoder_decoder_factor`. "
                 f"Got chunk_size_encoder={self.chunk_size_encoder}, "
-                f"encoder_factor={self.encoder_factor}"
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
             )
 
     def _set_default_vae_config(self) -> None:

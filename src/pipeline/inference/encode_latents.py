@@ -11,8 +11,8 @@ from monai.data import Dataset, ThreadDataLoader  # type: ignore[attr-defined]
 from monai.transforms import Compose, EnsureTyped, MapTransform  # type: ignore[attr-defined]
 from tqdm import tqdm
 
+from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.inference.sliding_window_inference import sliding_window_inference
 
 
 class LoadProcessedTensord(MapTransform):
@@ -284,7 +284,7 @@ def encode_latents(config: MaisiTestingConfig) -> None:
                 image_size=config.encoder_image_size,
                 model=vae_encoder_wrapper,
                 model_type="encoder",
-                factor=config.encoder_factor,
+                factor=config.encoder_decoder_factor,
             )
 
             save_path = Path(batch["save_path"][0])

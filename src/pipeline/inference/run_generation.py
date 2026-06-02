@@ -2,7 +2,7 @@ import glob
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import torch
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
@@ -12,13 +12,14 @@ from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import (
     DiffusionModelUNetMaisi,
 )
 from monai.data import ThreadDataLoader  # type: ignore[attr-defined]
+from monai.data.dataset import Dataset as MonaiDataset
 from monai.networks.schedulers import RFlowScheduler  # type: ignore[attr-defined]
 from torch.utils.data import Dataset as TorchDataset
 from tqdm import tqdm
 
+from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.inference.encode_latents import _resolve_device, load_vae_model
-from src.pipeline.inference.sliding_window_inference import sliding_window_inference
 
 
 @dataclass
@@ -151,37 +152,13 @@ def load_rflow_model(
 
     model = DiffusionModelUNetMaisi(**config.rflow_config).to(device)
 
-    checkpoint = torch.load(
+    state_dict = torch.load(
         config.rflow_weight_path,
         map_location=device,
         weights_only=False,
     )
 
-    if isinstance(checkpoint, dict) and "unet_state_dict" in checkpoint:
-        state_dict = checkpoint["unet_state_dict"]
-    else:
-        state_dict = checkpoint
-
-    first_layer_key = "conv_in.conv.weight"
-
-    if first_layer_key in state_dict:
-        checkpoint_shape = state_dict[first_layer_key].shape
-        model_shape = model.state_dict()[first_layer_key].shape
-
-        if checkpoint_shape != model_shape:
-            raise RuntimeError(
-                "Rectified flow checkpoint does not match the current model "
-                "architecture.\n"
-                f"Layer: {first_layer_key}\n"
-                f"Checkpoint shape: {checkpoint_shape}\n"
-                f"Model shape: {model_shape}\n\n"
-                "This probably means that the checkpoint was not trained or "
-                "adapted for the current `rflow_config`. If your model expects "
-                "8 input channels, the checkpoint must also contain 8-channel "
-                "weights"
-            )
-
-    model.load_state_dict(state_dict, strict=True)
+    model.load_state_dict(state_dict)
     model.eval()
 
     return model
@@ -231,7 +208,7 @@ def decode_latent_to_ct(
         image_size=config.decoder_image_size,
         model=vae_model.decode,
         model_type="decoder",
-        factor=config.decoder_factor,
+        factor=config.encoder_decoder_factor,
     )
 
     reconstructed_ct = torch.clamp(
@@ -300,7 +277,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     dataset = PatientConditionDataset(config.latent_ct_dir)
 
     loader = ThreadDataLoader(
-        cast(Any, dataset),
+        dataset=cast(MonaiDataset, dataset),
         batch_size=1,
         shuffle=False,
         pin_memory=device.type == "cuda",
