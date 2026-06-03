@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -164,7 +164,7 @@ def extract_roi(
     chunk_size: int,
     halo_size: int,
     image_size: int,
-    model_type: str,
+    model_type: Literal["encoder", "decoder"],
     factor: int,
 ) -> tuple[torch.Tensor, int]:
     """
@@ -202,7 +202,7 @@ def extract_roi(
     image_size : int
         Full image size along the selected splitting axis.
 
-    model_type : str
+    model_type : Literal["encoder", "decoder"]
         Type of model applied to the chunk.
         Must be either "encoder" or "decoder".
 
@@ -307,7 +307,7 @@ def sliding_window_inference(
     halo_size: int,
     image_size: int,
     model: Callable[[torch.Tensor], torch.Tensor],
-    model_type: str,
+    model_type: Literal["encoder", "decoder"],
     factor: int,
 ) -> torch.Tensor:
     """
@@ -345,7 +345,7 @@ def sliding_window_inference(
     model
         Callable model used for inference on each chunk.
 
-    model_type : str
+    model_type : Literal["encoder", "decoder"]
         Type of model used for inference.
         Must be either:
         - "encoder": output spatial size is smaller by `factor`

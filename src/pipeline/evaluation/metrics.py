@@ -389,15 +389,15 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     return float(np.mean(np.abs(pred_edge - ref_edge)))
 
 
-def _center_slices_for_lpips(
+def _evenly_spaced_slices_for_lpips(
     arr: np.ndarray,
-    max_slices: int = 16,
+    max_slices: int = 32,
 ) -> torch.Tensor:
     """
-    Convert selected center 2D CT slices to LPIPS input format.
+    Extract evenly spaced 2D CT slices for LPIPS input format.
 
     LPIPS expects 2D RGB-like images, so this function:
-    - selects up to `max_slices` slices from the center of the 3D volume
+    - selects up to `max_slices` slices evenly across the full 3D volume
     - converts slices from shape [H, W, Z] to [Z, H, W]
     - adds a channel dimension
     - repeats the single CT channel into 3 channels
@@ -409,7 +409,7 @@ def _center_slices_for_lpips(
         Input 3D CT array normalized to [0, 1], expected shape [H, W, Z].
 
     max_slices : int
-        Maximum number of center slices used for LPIPS calculation.
+        Maximum number of evenly spaced slices used for LPIPS calculation.
 
     Returns
     -------
@@ -434,29 +434,32 @@ def _center_slices_for_lpips(
         raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values")
+        raise ValueError("`arr` contains NaN or infinite values.")
 
     if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation.")
 
     if max_slices < 1:
-        raise ValueError("`max_slices` must be at least 1")
+        raise ValueError("`max_slices` must be at least 1.")
 
     z_dim = arr.shape[-1]
 
     if z_dim <= max_slices:
-        slice_ids = list(range(z_dim))
+        slice_ids = np.arange(z_dim)
     else:
-        center = z_dim // 2
-        half = max_slices // 2
-        slice_ids = list(range(center - half, center + half))
+        slice_ids = np.linspace(
+            0,
+            z_dim - 1,
+            num=max_slices,
+            dtype=int,
+        )
 
-    slices = arr[:, :, slice_ids]  # H, W, Z
-    slices = np.moveaxis(slices, -1, 0)  # Z, H, W
+    slices = arr[:, :, slice_ids]          # H, W, Z
+    slices = np.moveaxis(slices, -1, 0)    # Z, H, W
 
     tensor = torch.from_numpy(slices).float()
-    tensor = tensor.unsqueeze(1)  # Z, 1, H, W
-    tensor = tensor.repeat(1, 3, 1, 1)  # Z, 3, H, W
+    tensor = tensor.unsqueeze(1)           # Z, 1, H, W
+    tensor = tensor.repeat(1, 3, 1, 1)     # Z, 3, H, W
 
     tensor = tensor * 2.0 - 1.0
 
@@ -474,15 +477,18 @@ def lpips_3d(
     Calculate slice-wise LPIPS between two 3D images and average the result.
 
     LPIPS is normally defined for 2D RGB images. For 3D CT volumes, this
-    function selects center slices from each volume, converts them to LPIPS
-    input format, computes LPIPS slice-wise, and returns the mean score.
+    function selects evenly spaced slices across the full volume, converts them
+    to LPIPS input format, computes LPIPS slice-wise, and returns the mean score.
+
+    Using evenly spaced slices makes the metric less sensitive to one noisy or
+    unrepresentative center slice.
 
     Interpretation:
     - Higher LPIPS means greater perceptual difference.
     - When comparing generated variants with each other, higher pairwise LPIPS
-      usually suggests higher visual diversity.
+    usually suggests higher visual diversity.
     - When comparing generated CTs to reference CTs, lower LPIPS means higher
-      perceptual similarity.
+    perceptual similarity.
 
     Parameters
     ----------
@@ -499,7 +505,7 @@ def lpips_3d(
         Device on which LPIPS should be calculated.
 
     max_slices : int
-        Maximum number of center slices used for LPIPS calculation.
+        Maximum number of evenly spaced slices used for LPIPS calculation.
 
     Returns
     -------
@@ -547,12 +553,12 @@ def lpips_3d(
     if max_slices < 1:
         raise ValueError("`max_slices` must be at least 1")
 
-    pred_tensor = _center_slices_for_lpips(
+    pred_tensor = _evenly_spaced_slices_for_lpips(
         pred,
         max_slices=max_slices,
     ).to(device)
 
-    ref_tensor = _center_slices_for_lpips(
+    ref_tensor = _evenly_spaced_slices_for_lpips(
         ref,
         max_slices=max_slices,
     ).to(device)
