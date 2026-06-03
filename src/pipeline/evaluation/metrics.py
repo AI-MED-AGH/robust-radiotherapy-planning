@@ -803,7 +803,7 @@ def calculate_similarity_metrics(
     lpips_model = None
 
     if use_lpips:
-        import lpips  #type: ignore[import-untyped]
+        import lpips  # type: ignore[import-untyped]
 
         lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
         lpips_model.eval()
