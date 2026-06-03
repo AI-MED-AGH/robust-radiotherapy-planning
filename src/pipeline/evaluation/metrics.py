@@ -283,16 +283,10 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         raise ValueError("`ref` contains NaN or infinite values.")
 
     if pred.min() < 0.0 or pred.max() > 1.0:
-        raise ValueError(
-            f"`pred` values must be in the range [0, 1], "
-            f"got min={pred.min()}, max={pred.max()}"
-        )
+        raise ValueError(f"`pred` values must be in the range [0, 1], got min={pred.min()}, max={pred.max()}")
 
     if ref.min() < 0.0 or ref.max() > 1.0:
-        raise ValueError(
-            f"`ref` values must be in the range [0, 1], "
-            f"got min={ref.min()}, max={ref.max()}"
-        )
+        raise ValueError(f"`ref` values must be in the range [0, 1], got min={ref.min()}, max={ref.max()}")
 
     scores = []
 
@@ -487,12 +481,12 @@ def _evenly_spaced_slices_for_lpips(
             dtype=int,
         )
 
-    slices = arr[:, :, slice_ids]          # H, W, Z
-    slices = np.moveaxis(slices, -1, 0)    # Z, H, W
+    slices = arr[:, :, slice_ids]  # H, W, Z
+    slices = np.moveaxis(slices, -1, 0)  # Z, H, W
 
     tensor = torch.from_numpy(slices).float()
-    tensor = tensor.unsqueeze(1)           # Z, 1, H, W
-    tensor = tensor.repeat(1, 3, 1, 1)     # Z, 3, H, W
+    tensor = tensor.unsqueeze(1)  # Z, 1, H, W
+    tensor = tensor.repeat(1, 3, 1, 1)  # Z, 3, H, W
 
     tensor = tensor * 2.0 - 1.0
 
@@ -809,7 +803,7 @@ def calculate_similarity_metrics(
     lpips_model = None
 
     if use_lpips:
-        import lpips
+        import lpips  #type: ignore[import-untyped]
 
         lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
         lpips_model.eval()
