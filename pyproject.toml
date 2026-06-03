@@ -6,12 +6,14 @@ requires-python = "==3.11.15"
 dependencies = [
     "einops>=0.8.2,<1.0.0",
     "jupyter>=1.1.1,<2.0.0",
+    "lpips>=0.1.4,<1.0.0",
     "matplotlib>=3.10.8,<4.0.0",
     "monai>=1.5.2,<2.0.0",
     "mypy>=1.20.0,<2.0.0",
     "nibabel>=5.4.2,<6.0.0",
-    "numpy>=2.4.4,<3.0.0",
+    "numpy==2.4.4",
     "optuna>=4.8.0,<5.0.0",
+    "pandas>=2.2,<3.0.0",
     "ruff>=0.15.9,<1.0.0",
     "scikit-image>=0.26.0,<1.0.0",
     "simpleitk>=2.5.3,<3.0.0",
@@ -82,3 +84,10 @@ exclude = [
 
 # Standard stability settings
 warn_unused_configs = true
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=3.0.3.260530",
+    "scipy-stubs>=1.17.1.5",
+    "types-tqdm>=4.67.3.20260518",
+]
