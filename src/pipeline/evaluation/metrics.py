@@ -261,8 +261,38 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         If `pred` and `ref` do not have the same shape.
     """
 
+    if pred.size == 0:
+        raise ValueError("`pred` cannot be empty.")
+
+    if ref.size == 0:
+        raise ValueError("`ref` cannot be empty.")
+
+    if pred.ndim != 3:
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
+
+    if ref.ndim != 3:
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
+
     if pred.shape != ref.shape:
-        raise ValueError(f"Shape mismatch: pred={pred.shape}, ref={ref.shape}")
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
+
+    if not np.isfinite(pred).all():
+        raise ValueError("`pred` contains NaN or infinite values.")
+
+    if not np.isfinite(ref).all():
+        raise ValueError("`ref` contains NaN or infinite values.")
+
+    if pred.min() < 0.0 or pred.max() > 1.0:
+        raise ValueError(
+            f"`pred` values must be in the range [0, 1], "
+            f"got min={pred.min()}, max={pred.max()}"
+        )
+
+    if ref.min() < 0.0 or ref.max() > 1.0:
+        raise ValueError(
+            f"`ref` values must be in the range [0, 1], "
+            f"got min={ref.min()}, max={ref.max()}"
+        )
 
     scores = []
 
@@ -312,13 +342,16 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
     """
 
     if arr.size == 0:
-        raise ValueError("`arr` cannot be empty")
+        raise ValueError("`arr` cannot be empty.")
 
     if arr.ndim != 3:
-        raise ValueError(f"`arr` must be a 3D array. Got shape {arr.shape}")
+        raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values")
+        raise ValueError("`arr` contains NaN or infinite values.")
+
+    if arr.min() < 0.0 or arr.max() > 1.0:
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation.")
 
     sx = sobel(arr, axis=0)
     sy = sobel(arr, axis=1)
@@ -776,15 +809,10 @@ def calculate_similarity_metrics(
     lpips_model = None
 
     if use_lpips:
-        try:
-            import lpips  # type: ignore
+        import lpips
 
-            lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
-            lpips_model.eval()
-
-        except ImportError:
-            print("LPIPS package not installed. Skipping LPIPS")
-            use_lpips = False
+        lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
+        lpips_model.eval()
 
     rows = []
 

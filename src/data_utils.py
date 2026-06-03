@@ -375,14 +375,8 @@ def sliding_window_inference(
         If input height or width is smaller than `image_size`.
     """
 
-    if not isinstance(image, torch.Tensor):
-        raise TypeError(f"`image` must be a torch.Tensor. Got {type(image)}")
-
     if image.ndim != 5:
         raise ValueError(f"`image` must have shape [B, C, H, W, D]. Got {image.shape}")
-
-    if not callable(model):
-        raise TypeError("`model` must be callable")
 
     if model_type not in ["encoder", "decoder"]:
         raise ValueError("`model_type` must be either 'encoder' or 'decoder'")
