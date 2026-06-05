@@ -15,6 +15,7 @@ def create_data_split_dict(
     folds: int = 5,
     data_root: Path | None = None,
     output_json: Path | None = None,
+    blacklist: list[str] | None = None,
     save: bool = True,
 ) -> dict[str | int, Any]:
     """
@@ -56,6 +57,9 @@ def create_data_split_dict(
         output_json : Path | None
             Path to output JSON file. If None, defaults to:
             <src>/data_full/data_dict_encoder.json
+        blacklist: list[str] | None
+            A list of file names to not add to the output if encountered. Assumed to not include planning CTs.
+            Defaults to a predefined list.
         save : bool
             Whether to save the resulting dictionary as JSON.
 
@@ -84,6 +88,28 @@ def create_data_split_dict(
     if output_json is None:
         output_json = src_root / "data_full" / "data_dict.json"
 
+    if blacklist is None:
+        blacklist = [
+            "Patient_20_fraction_14_.nii.gz",
+            "Patient_63_fraction_12_.nii.gz",
+            "Patient_63_fraction_13_.nii.gz",
+            "Patient_63_fraction_14_.nii.gz",
+            "Patient_63_fraction_15_.nii.gz",
+            "Patient_63_fraction_21_.nii.gz",
+            "Patient_63_fraction_22_.nii.gz",
+            "Patient_63_fraction_23_.nii.gz",
+            "Patient_64_fraction_3_.nii.gz",
+            "Patient_64_fraction_4_.nii.gz",
+            "Patient_64_fraction_21_.nii.gz",
+            "Patient_64_fraction_22_.nii.gz",
+            "Patient_64_fraction_23_.nii.gz",
+            "Patient_66_fraction_24_.nii.gz",
+            "Patient_66_fraction_32_.nii.gz",
+            "Patient_66_fraction_33_.nii.gz",
+            "Patient_76_fraction_7_.nii.gz",
+            "Patient_77_fraction_7_.nii.gz",
+        ]
+
     if not data_root.exists():
         raise FileNotFoundError(f"Data directory does not exist: {data_root}")
 
@@ -93,13 +119,13 @@ def create_data_split_dict(
     if folds < 2:
         raise ValueError("folds must be at least 2")
 
-    def build_patient_cts(patient_ids: list[str], ct_dir: Path) -> list[str]:
+    def build_patient_cts(patient_ids: list[str], ct_dir: Path, blacklist: list[str]) -> list[str]:
         files: list[str] = []
 
         for patient_id in patient_ids:
             patient_dir = ct_dir / f"Patient_{patient_id}"
 
-            fraction_names = [f for f in sorted(patient_dir.glob("*.nii.gz"))]
+            fraction_names = [f for f in sorted(patient_dir.glob("*.nii.gz")) if f.name not in blacklist]
 
             files.extend(str(f) for f in fraction_names)
 
@@ -143,11 +169,12 @@ def create_data_split_dict(
         fold_train_ids = [pid for pid in train_ids if pid not in val_ids]
 
         data_dict[fold] = {
-            "train": build_patient_cts(fold_train_ids, data_root),
-            "val": build_patient_cts(val_ids, data_root),
+            "train": build_patient_cts(fold_train_ids, data_root, blacklist),
+            "val": build_patient_cts(val_ids, data_root, blacklist),
         }
 
-    data_dict["test"] = build_patient_cts(test_ids, data_root)
+    # No blacklist for test data
+    data_dict["test"] = build_patient_cts(test_ids, data_root, [])
 
     if save:
         output_json.parent.mkdir(parents=True, exist_ok=True)
