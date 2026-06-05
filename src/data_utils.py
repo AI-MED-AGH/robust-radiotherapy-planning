@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 def create_data_split_dict(
@@ -190,7 +191,6 @@ def extract_roi(
     axis: int,
     chunk_size: int,
     halo_size: int,
-    image_size: int,
     model_type: Literal["encoder", "decoder"],
     factor: int,
 ) -> tuple[torch.Tensor, int]:
@@ -226,9 +226,6 @@ def extract_roi(
     halo_size : int
         Number of extra voxels added on each side of the chunk.
 
-    image_size : int
-        Full image size along the selected splitting axis.
-
     model_type : Literal["encoder", "decoder"]
         Type of model applied to the chunk.
         Must be either "encoder" or "decoder".
@@ -255,7 +252,7 @@ def extract_roi(
         If `image` is not 5-dimensional.
         If `axis` is not 2 or 3.
         If `model_type` is not "encoder" or "decoder".
-        If `step`, `chunk_size`, `halo_size`, `image_size`, or `factor`
+        If `step`, `chunk_size`, `halo_size`, or `factor`
         have invalid values.
     """
 
@@ -280,17 +277,13 @@ def extract_roi(
     if halo_size < 0:
         raise ValueError("`halo_size` must be non-negative")
 
-    if image_size <= 0:
-        raise ValueError("`image_size` must be greater than 0")
-
     if factor <= 0:
         raise ValueError("`factor` must be greater than 0")
 
+    image_size = image.shape[axis]
+
     start_idx = step * chunk_size
     end_idx = start_idx + chunk_size
-
-    if start_idx >= image_size:
-        raise ValueError(f"`step` is too large for image size. start_idx={start_idx}, image_size={image_size}")
 
     input_start = max(0, start_idx - halo_size)
     input_end = min(image_size, end_idx + halo_size)
@@ -300,30 +293,25 @@ def extract_roi(
     else:
         image_chunk = image[:, :, :, input_start:input_end, :].contiguous()
 
-    current_size = image_chunk.shape[axis]
-    target_size = chunk_size + 2 * halo_size
-    pad_amount = target_size - current_size
+    # Amount of padding needed to preserve the expected halo position.
+    pad_before = halo_size - (start_idx - input_start)
+    pad_after = halo_size - (input_end - end_idx)
 
-    if pad_amount < 0:
-        raise ValueError(
-            f"`pad_amount` cannot be negative. Got {pad_amount}. Check chunk_size, halo_size, and image_size"
+    if axis == 2:
+        image_chunk = F.pad(
+            image_chunk,
+            (0, 0, 0, 0, pad_before, pad_after),
+        )
+    else:
+        image_chunk = F.pad(
+            image_chunk,
+            (0, 0, pad_before, pad_after, 0, 0),
         )
 
     if model_type == "encoder":
-        padding = (start_idx - input_start) // factor
+        padding = halo_size // factor
     else:
-        padding = (start_idx - input_start) * factor
-
-    if axis == 2:
-        image_chunk = torch.nn.functional.pad(
-            image_chunk,
-            (0, 0, 0, 0, 0, pad_amount),
-        )
-    else:
-        image_chunk = torch.nn.functional.pad(
-            image_chunk,
-            (0, 0, 0, pad_amount, 0, 0),
-        )
+        padding = halo_size * factor
 
     return image_chunk, padding
 
@@ -447,7 +435,6 @@ def sliding_window_inference(
             axis=2,
             chunk_size=chunk_size,
             halo_size=halo_size,
-            image_size=image_size,
             model_type=model_type,
             factor=factor,
         )
@@ -461,7 +448,6 @@ def sliding_window_inference(
                 axis=3,
                 chunk_size=chunk_size,
                 halo_size=halo_size,
-                image_size=image_size,
                 model_type=model_type,
                 factor=factor,
             )

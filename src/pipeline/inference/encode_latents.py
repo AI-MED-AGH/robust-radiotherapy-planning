@@ -251,7 +251,6 @@ def encode_latents(config: MaisiTestingConfig) -> None:
 
     loader = build_processed_ct_loader(
         config=config,
-        batch_size=1,
     )
 
     def vae_encoder_wrapper(image_patch: torch.Tensor) -> torch.Tensor:

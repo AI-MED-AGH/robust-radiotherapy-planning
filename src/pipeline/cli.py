@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
@@ -146,7 +147,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
 
 def run_stage(
-    stage: str,
+    stage: Literal["prepare", "encode", "generate", "evaluate", "all"],
     config: MaisiTestingConfig,
     use_lpips: bool,
 ) -> None:

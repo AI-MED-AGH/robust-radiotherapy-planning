@@ -87,6 +87,12 @@ class MaisiTestingConfig:
     spacing : tuple[float, float, float]
         Target voxel spacing used during preprocessing.
 
+    data_min : float
+        Minimum CT intensity value used for normalization and clipping.
+
+    data_max : float
+        Maximum CT intensity value used for normalization and clipping.
+
     chunk_size_encoder : int
         Core sliding-window chunk size used during VAE encoding.
 
@@ -94,10 +100,10 @@ class MaisiTestingConfig:
         Core sliding-window chunk size used during VAE decoding.
 
     halo_encoder : int
-        Halo size added around encoder chunks to reduce boundary artifacts.
+        Halo size added around encoder chunks to remove boundary artifacts.
 
     halo_decoder : int
-        Halo size added around decoder chunks to reduce boundary artifacts.
+        Halo size added around decoder chunks to remove boundary artifacts.
 
     encoder_decoder_factor : int
         Spatial scaling factor of the VAE encoder.
@@ -162,8 +168,8 @@ class MaisiTestingConfig:
     # Model weights
     weights_dir: Path = Path("src/pipeline/weights")
 
-    vae_weight_path: Path = weights_dir / "autoencoder_v1.pt"
-    rflow_weight_path: Path = weights_dir / "diff_unet_3d_rflow-ct.pt"
+    vae_weight_path: Path = weights_dir / "autoencoder.pt"
+    rflow_weight_path: Path = weights_dir / "diff_unet.pt"
 
     # Inference config
     cts_per_patient: int = 1
@@ -173,6 +179,10 @@ class MaisiTestingConfig:
 
     # MAISI-specific config
     spacing: tuple[float, float, float] = (1.171875, 1.171875, 3.0)
+
+    # CT intensity normalization range
+    data_min: float = -1000.0
+    data_max: float = 1500.0
 
     # Custom sliding-window inference
     # Chunk size c means the sliding window is c x c x d,
@@ -302,6 +312,12 @@ class MaisiTestingConfig:
 
         if any(value <= 0 for value in self.spacing):
             raise ValueError("All `spacing` values must be greater than 0")
+        
+        if self.data_min >= self.data_max:
+            raise ValueError(
+                "`data_min` must be smaller than `data_max`. "
+                f"Got data_min={self.data_min}, data_max={self.data_max}"
+            )
 
         if self.chunk_size_encoder <= 0:
             raise ValueError("`chunk_size_encoder` must be greater than 0")
