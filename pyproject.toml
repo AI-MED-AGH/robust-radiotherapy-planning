@@ -11,7 +11,7 @@ dependencies = [
     "monai>=1.5.2,<2.0.0",
     "mypy>=1.20.0,<2.0.0",
     "nibabel>=5.4.2,<6.0.0",
-    "numpy==2.4.4",
+    "numpy>=2.4.4,<3.0.0",
     "optuna>=4.8.0,<5.0.0",
     "pandas>=2.2,<3.0.0",
     "ruff>=0.15.9,<1.0.0",
@@ -87,7 +87,7 @@ warn_unused_configs = true
 
 [dependency-groups]
 dev = [
-    "pandas-stubs>=3.0.3.260530",
-    "scipy-stubs>=1.17.1.5",
-    "types-tqdm>=4.67.3.20260518",
+    "pandas-stubs>=3.0.3.260530,<4",
+    "scipy-stubs>=1.17.1.5,<2",
+    "types-tqdm>=4.67.3.20260518,<5",
 ]

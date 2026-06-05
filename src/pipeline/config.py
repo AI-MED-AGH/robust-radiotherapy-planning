@@ -82,10 +82,7 @@ class MaisiTestingConfig:
         Number of rectified-flow sampling steps.
 
     latent_scale : float
-        Scaling factor applied to latent representations.
-
-    device : str
-        Device used during inference (e.g. "cuda" or "cpu").
+        Scaling factor applied to latent representations..
 
     spacing : tuple[float, float, float]
         Target voxel spacing used during preprocessing.

@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.inference.encode_latents import _resolve_device, load_vae_model
+from src.pipeline.inference.encode_latents import load_vae_model
 
 
 @dataclass
@@ -255,7 +255,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         If scheduler config is missing required settings.
     """
 
-    device = _resolve_device(config)
+    device = torch.device(config.device)
 
     if config.scheduler_config is None:
         raise ValueError("`config.scheduler_config` cannot be None")
