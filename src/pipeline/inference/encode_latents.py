@@ -280,7 +280,6 @@ def encode_latents(config: MaisiTestingConfig) -> None:
                 image=batch["image"].to(device, non_blocking=True),
                 chunk_size=config.chunk_size_encoder,
                 halo_size=config.halo_encoder,
-                image_size=config.encoder_image_size,
                 model=vae_encoder_wrapper,
                 model_type="encoder",
                 factor=config.encoder_decoder_factor,

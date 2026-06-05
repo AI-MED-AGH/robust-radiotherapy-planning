@@ -208,7 +208,6 @@ def decode_latent_to_ct(
         image=z_t,
         chunk_size=config.chunk_size_decoder,
         halo_size=config.halo_decoder,
-        image_size=config.decoder_image_size,
         model=vae_model.decode,
         model_type="decoder",
         factor=config.encoder_decoder_factor,

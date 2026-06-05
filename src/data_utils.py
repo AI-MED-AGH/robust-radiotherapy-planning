@@ -320,7 +320,6 @@ def sliding_window_inference(
     image: torch.Tensor,
     chunk_size: int,
     halo_size: int,
-    image_size: int,
     model: Callable[[torch.Tensor], torch.Tensor],
     model_type: Literal["encoder", "decoder"],
     factor: int,
@@ -353,10 +352,6 @@ def sliding_window_inference(
     halo_size : int
         Number of halo voxels added around each chunk.
 
-    image_size : int
-        Full image size along height and width.
-        This assumes height and width have the same size.
-
     model
         Callable model used for inference on each chunk.
 
@@ -383,7 +378,7 @@ def sliding_window_inference(
     ValueError
         If `image` is not 5-dimensional.
         If `model_type` is not "encoder" or "decoder".
-        If `chunk_size`, `image_size`, or `factor` are not positive.
+        If `chunk_size`, or `factor` are not positive.
         If `halo_size` is negative.
         If `image_size` is not divisible by `chunk_size`.
         If encoder `chunk_size` is not divisible by `factor`.
@@ -402,21 +397,20 @@ def sliding_window_inference(
     if halo_size < 0:
         raise ValueError("`halo_size` must be non-negative")
 
-    if image_size <= 0:
-        raise ValueError("`image_size` must be greater than 0")
-
     if factor <= 0:
         raise ValueError("`factor` must be greater than 0")
-
-    if image_size % chunk_size != 0:
-        raise ValueError(
-            f"`image_size` must be divisible by `chunk_size`. Got image_size={image_size}, chunk_size={chunk_size}"
-        )
 
     if model_type == "encoder" and chunk_size % factor != 0:
         raise ValueError(
             "For encoder inference, `chunk_size` must be divisible by "
             f"`factor`. Got chunk_size={chunk_size}, factor={factor}"
+        )
+
+    image_size = image.shape[2]
+
+    if image_size % chunk_size != 0:
+        raise ValueError(
+            f"`image_size` must be divisible by `chunk_size`. Got image_size={image_size}, chunk_size={chunk_size}"
         )
 
     if image.shape[2] < image_size or image.shape[3] < image_size:
@@ -426,6 +420,7 @@ def sliding_window_inference(
         )
 
     num_steps = image_size // chunk_size
+
     output_chunks = []
 
     for step_h in range(num_steps):

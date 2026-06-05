@@ -84,6 +84,9 @@ class MaisiTestingConfig:
     latent_scale : float
         Scaling factor applied to latent representations..
 
+    device : str
+        Device used for model inference ("cuda" or "cpu").
+
     spacing : tuple[float, float, float]
         Target voxel spacing used during preprocessing.
 
@@ -92,6 +95,9 @@ class MaisiTestingConfig:
 
     data_max : float
         Maximum CT intensity value used for normalization and clipping.
+
+    target_image_size : tuple[int, int, int]
+        Target image size (height, width, depth) after preprocessing.
 
     chunk_size_encoder : int
         Core sliding-window chunk size used during VAE encoding.
@@ -183,6 +189,9 @@ class MaisiTestingConfig:
     # CT intensity normalization range
     data_min: float = -1000.0
     data_max: float = 1500.0
+
+    # Target image size after preprocessing (height, width, depth)
+    target_image_size: tuple[int, int, int] = (512, 512, 128)
 
     # Custom sliding-window inference
     # Chunk size c means the sliding window is c x c x d,
@@ -357,6 +366,35 @@ class MaisiTestingConfig:
             raise ValueError(
                 "`chunk_size_encoder` must be divisible by `encoder_decoder_factor`. "
                 f"Got chunk_size_encoder={self.chunk_size_encoder}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if len(self.target_image_size) != 3:
+            raise ValueError(
+                f"`target_image_size` must contain exactly 3 values (H, W, D). Got {self.target_image_size}"
+            )
+
+        if any(size <= 0 for size in self.target_image_size):
+            raise ValueError(f"`target_image_size` values must be greater than 0. Got {self.target_image_size}")
+
+        if self.target_image_size[0] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image height must be divisible by "
+                f"`encoder_decoder_factor`. Got height={self.target_image_size[0]}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if self.target_image_size[1] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image width must be divisible by "
+                f"`encoder_decoder_factor`. Got width={self.target_image_size[1]}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if self.target_image_size[2] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image depth must be divisible by "
+                f"`encoder_decoder_factor`. Got depth={self.target_image_size[2]}, "
                 f"encoder_decoder_factor={self.encoder_decoder_factor}"
             )
 

@@ -87,7 +87,7 @@ warn_unused_configs = true
 
 [dependency-groups]
 dev = [
-    "pandas-stubs>=3.0.3.260530,<4",
-    "scipy-stubs>=1.17.1.5,<2",
-    "types-tqdm>=4.67.3.20260518,<5",
+    "pandas-stubs>=3.0.3.260530,<4.0.0",
+    "scipy-stubs>=1.17.1.5,<2.0.0",
+    "types-tqdm>=4.67.3.20260518,<5.0.0",
 ]

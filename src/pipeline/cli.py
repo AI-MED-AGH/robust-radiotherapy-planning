@@ -47,13 +47,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--device",
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device used for inference.",
-    )
-
-    parser.add_argument(
         "--cts-per-patient",
         type=int,
         default=1,
@@ -129,7 +122,6 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     config = MaisiTestingConfig(
         validate_paths=not args.no_validate_paths,
-        device=args.device,
         cts_per_patient=args.cts_per_patient,
         steps=args.steps,
     )
@@ -163,7 +155,7 @@ def run_stage(
 
     Parameters
     ----------
-    stage : str
+    stage : Literal["prepare", "encode", "generate", "evaluate", "all"]
         Pipeline stage to run.
 
     config : MaisiTestingConfig
