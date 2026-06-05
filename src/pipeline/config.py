@@ -312,11 +312,10 @@ class MaisiTestingConfig:
 
         if any(value <= 0 for value in self.spacing):
             raise ValueError("All `spacing` values must be greater than 0")
-        
+
         if self.data_min >= self.data_max:
             raise ValueError(
-                "`data_min` must be smaller than `data_max`. "
-                f"Got data_min={self.data_min}, data_max={self.data_max}"
+                f"`data_min` must be smaller than `data_max`. Got data_min={self.data_min}, data_max={self.data_max}"
             )
 
         if self.chunk_size_encoder <= 0:
