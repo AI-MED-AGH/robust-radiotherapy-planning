@@ -123,6 +123,15 @@ class MaisiTestingConfig:
         Height and width of the decoder latent space on which
         sliding-window inference is performed.
 
+    use_lpips : bool
+        Whether to calculate the LPIPS metric during evaluation.
+
+    lpips_net : str
+        Which backbone network to use for LPIPS calculation.
+
+    max_lpips_slices : int
+        Maximum number of slices to use for LPIPS calculation per volume.
+
     vae_config : dict | None
         VAE architecture configuration.
         If None, a default MAISI configuration is used.
@@ -213,6 +222,11 @@ class MaisiTestingConfig:
     # Decoder receives latents: 128 x 128 x 32.
     encoder_image_size: int = 512
     decoder_image_size: int = 128
+
+    # Lpips arguments
+    use_lpips: bool = True
+    lpips_net: str = "alex"
+    max_lpips_slices: int = 16
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict[str, Any] | None = None
@@ -397,6 +411,12 @@ class MaisiTestingConfig:
                 f"`encoder_decoder_factor`. Got depth={self.target_image_size[2]}, "
                 f"encoder_decoder_factor={self.encoder_decoder_factor}"
             )
+
+        if self.max_lpips_slices < 1:
+            raise ValueError("`max_lpips_slices` must be at least 1")
+
+        if self.lpips_net not in {"alex", "vgg", "squeeze"}:
+            raise ValueError(f"`lpips_net` must be one of: 'alex', 'vgg', 'squeeze'. Got {self.lpips_net}")
 
     def _set_default_vae_config(self) -> None:
         """

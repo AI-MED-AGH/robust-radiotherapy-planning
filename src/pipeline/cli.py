@@ -120,20 +120,23 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         If required CLI arguments are missing from `args`.
     """
 
-    config = MaisiTestingConfig(
-        validate_paths=not args.no_validate_paths,
-        cts_per_patient=args.cts_per_patient,
-        steps=args.steps,
-    )
+    config_kwargs = {
+        "validate_paths": not args.no_validate_paths,
+        "cts_per_patient": args.cts_per_patient,
+        "steps": args.steps,
+        "use_lpips": not args.no_lpips,
+    }
 
     if args.generated_ct_dir is not None:
-        config.generated_ct_dir = args.generated_ct_dir
+        config_kwargs["generated_ct_dir"] = args.generated_ct_dir
 
     if args.processed_ct_dir is not None:
-        config.processed_ct_dir = args.processed_ct_dir
+        config_kwargs["processed_ct_dir"] = args.processed_ct_dir
 
     if args.metrics_dir is not None:
-        config.metrics_dir = args.metrics_dir
+        config_kwargs["metrics_dir"] = args.metrics_dir
+
+    config = MaisiTestingConfig(**config_kwargs)
 
     return config
 
@@ -141,7 +144,6 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 def run_stage(
     stage: Literal["prepare", "encode", "generate", "evaluate", "all"],
     config: MaisiTestingConfig,
-    use_lpips: bool,
 ) -> None:
     """
     Run one selected MAISI testing pipeline stage.
@@ -161,9 +163,6 @@ def run_stage(
     config : MaisiTestingConfig
         Pipeline configuration object.
 
-    use_lpips : bool
-        Whether to calculate LPIPS during evaluation.
-
     Raises
     ------
     ValueError
@@ -180,25 +179,13 @@ def run_stage(
         generate_ct_variants(config)
 
     elif stage == "evaluate":
-        evaluate_generated_cts(
-            generated_ct_dir=config.generated_ct_dir,
-            original_ct_dir=config.processed_ct_dir,
-            metrics_dir=config.metrics_dir,
-            use_lpips=use_lpips,
-            device=config.device,
-        )
+        evaluate_generated_cts(config)
 
     elif stage == "all":
         prepare_test_data(config)
         encode_latents(config)
         generate_ct_variants(config)
-        evaluate_generated_cts(
-            generated_ct_dir=config.generated_ct_dir,
-            original_ct_dir=config.processed_ct_dir,
-            metrics_dir=config.metrics_dir,
-            use_lpips=use_lpips,
-            device=config.device,
-        )
+        evaluate_generated_cts(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")
@@ -224,7 +211,6 @@ def main() -> None:
     run_stage(
         stage=args.stage,
         config=config,
-        use_lpips=not args.no_lpips,
     )
 
 

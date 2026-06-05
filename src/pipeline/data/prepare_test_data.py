@@ -26,7 +26,7 @@ def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
     - loads a CT image from disk
     - ensures channel-first format
     - reorients image to RAS
-    - clips and scales HU values from [-1000, 1000] to [0, 1]
+    - clips and scales HU values from [data_min, data_max] to [0, 1]
     - pads image to a fixed spatial size
     - center-crops image to a fixed spatial size
     - converts the output to a torch float32 tensor

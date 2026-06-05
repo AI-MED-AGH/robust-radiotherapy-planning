@@ -11,6 +11,8 @@ from scipy.ndimage import sobel
 from skimage.metrics import structural_similarity as ssim
 from tqdm import tqdm
 
+from src.pipeline.config import MaisiTestingConfig
+
 
 def _load_tensor(path: str | Path) -> torch.Tensor:
     """
@@ -72,16 +74,20 @@ class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
-def _to_numpy_01(tensor: torch.Tensor) -> FloatArray:
+def _to_numpy_01(
+    tensor: torch.Tensor,
+    data_min: float,
+    data_max: float,
+) -> FloatArray:
     """
     Convert a CT tensor to a NumPy array normalized to the range [0, 1].
 
     This helper supports two expected intensity formats:
     - already preprocessed tensors in the range [0, 1]
-    - HU-like tensors in the range approximately [-1000, 1000]
+    - HU-like tensors in the range approximately [data_min, data_max]
 
     If the tensor is already within [0, 1], it is returned unchanged as a
-    float32 NumPy array. Otherwise, values are clipped to [-1000, 1000] and
+    float32 NumPy array. Otherwise, values are clipped to [data_min, data_max] and
     linearly rescaled to [0, 1].
 
     Parameters
@@ -107,15 +113,18 @@ def _to_numpy_01(tensor: torch.Tensor) -> FloatArray:
     if not torch.isfinite(tensor).all():
         raise ValueError("`tensor` contains NaN or infinite values")
 
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
     arr = tensor.detach().cpu().numpy().astype(np.float32)
 
     # Case 1: already preprocessed to [0, 1]
     if arr.min() >= 0.0 and arr.max() <= 1.0:
         return arr
 
-    # Case 2: HU-like range [-1000, 1000]
-    arr = np.clip(arr, -1000, 1000).astype(np.float32)
-    arr = ((arr + 1000) / 2000).astype(np.float32)
+    # Case 2: HU-like range [data_min, data_max]
+    arr = np.clip(arr, data_min, data_max).astype(np.float32)
+    arr = ((arr - data_min) / (data_max - data_min)).astype(np.float32)
 
     return arr
 
@@ -494,11 +503,10 @@ def _evenly_spaced_slices_for_lpips(
 
 
 def lpips_3d(
+    config: MaisiTestingConfig,
+    lpips_model: LPIPSModel,
     pred: np.ndarray,
     ref: np.ndarray,
-    lpips_model: LPIPSModel,
-    device: torch.device,
-    max_slices: int = 16,
 ) -> float:
     """
     Calculate slice-wise LPIPS between two 3D images and average the result.
@@ -525,14 +533,11 @@ def lpips_3d(
     ref : np.ndarray
         Reference 3D CT array normalized to [0, 1].
 
-    lpips_model
+    config : MaisiTestingConfig
+         Configuration object containing LPIPS settings.
+
+    lpips_model : LPIPSModel
         Initialized LPIPS model.
-
-    device : torch.device
-        Device on which LPIPS should be calculated.
-
-    max_slices : int
-        Maximum number of evenly spaced slices used for LPIPS calculation.
 
     Returns
     -------
@@ -577,18 +582,15 @@ def lpips_3d(
     if ref.min() < 0.0 or ref.max() > 1.0:
         raise ValueError("`ref` must be normalized to [0, 1]")
 
-    if max_slices < 1:
-        raise ValueError("`max_slices` must be at least 1")
-
     pred_tensor = _evenly_spaced_slices_for_lpips(
         pred,
-        max_slices=max_slices,
-    ).to(device)
+        max_slices=config.max_lpips_slices,
+    ).to(config.device)
 
     ref_tensor = _evenly_spaced_slices_for_lpips(
         ref,
-        max_slices=max_slices,
-    ).to(device)
+        max_slices=config.max_lpips_slices,
+    ).to(config.device)
 
     with torch.no_grad():
         score = lpips_model(pred_tensor, ref_tensor)
@@ -733,13 +735,7 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
 
 
 def calculate_similarity_metrics(
-    generated_ct_dir: Path,
-    original_ct_dir: Path,
-    metrics_dir: Path,
-    use_lpips: bool = True,
-    lpips_net: str = "alex",
-    max_lpips_slices: int = 16,
-    device: str = "cuda",
+    config: MaisiTestingConfig,
 ) -> None:
     """
     Calculate generated-vs-real CT similarity metrics.
@@ -762,26 +758,8 @@ def calculate_similarity_metrics(
 
     Parameters
     ----------
-    generated_ct_dir : Path
-        Directory containing generated CT tensors.
-
-    original_ct_dir : Path
-        Directory containing original/reference CT tensors.
-
-    metrics_dir : Path
-        Directory where metric CSV files will be saved.
-
-    use_lpips : bool
-        Whether to calculate LPIPS.
-
-    lpips_net : str
-        LPIPS backbone name, for example "alex", "vgg", or "squeeze".
-
-    max_lpips_slices : int
-        Maximum number of center slices used for LPIPS.
-
-    device : str
-        Device used for LPIPS calculation. Usually "cuda" or "cpu".
+    config : MaisiTestingConfig
+        Configuration object containing evaluation settings and directory paths.
 
     Raises
     ------
@@ -790,22 +768,15 @@ def calculate_similarity_metrics(
         If no valid comparisons can be calculated.
     """
 
-    if max_lpips_slices < 1:
-        raise ValueError("`max_lpips_slices` must be at least 1")
-
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-
-    generated = collect_generated_cts(generated_ct_dir)
-    originals = collect_original_cts(original_ct_dir)
-
-    torch_device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
+    generated = collect_generated_cts(config.generated_ct_dir)
+    originals = collect_original_cts(config.processed_ct_dir)
 
     lpips_model = None
 
-    if use_lpips:
+    if config.use_lpips:
         import lpips  # type: ignore[import-untyped]
 
-        lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
+        lpips_model = lpips.LPIPS(net=config.lpips_net).to(config.device)
         lpips_model.eval()
 
     rows = []
@@ -821,10 +792,18 @@ def calculate_similarity_metrics(
             continue
 
         for gen_path in gen_paths:
-            gen_arr = _to_numpy_01(_load_tensor(gen_path))
+            gen_arr = _to_numpy_01(
+                _load_tensor(gen_path),
+                data_min=config.data_min,
+                data_max=config.data_max,
+            )
 
             for ref_path in ref_paths:
-                ref_arr = _to_numpy_01(_load_tensor(ref_path))
+                ref_arr = _to_numpy_01(
+                    _load_tensor(ref_path),
+                    data_min=config.data_min,
+                    data_max=config.data_max,
+                )
 
                 if gen_arr.shape != ref_arr.shape:
                     print(
@@ -844,13 +823,12 @@ def calculate_similarity_metrics(
                     "sob": sob_3d(gen_arr, ref_arr),
                 }
 
-                if use_lpips and lpips_model is not None:
+                if config.use_lpips and lpips_model is not None:
                     row["lpips"] = lpips_3d(
                         pred=gen_arr,
                         ref=ref_arr,
                         lpips_model=lpips_model,
-                        device=torch_device,
-                        max_slices=max_lpips_slices,
+                        config=config,
                     )
                 else:
                     row["lpips"] = np.nan
@@ -866,26 +844,22 @@ def calculate_similarity_metrics(
     df = pd.DataFrame(rows)
 
     df.to_csv(
-        metrics_dir / "generated_vs_real_metrics.csv",
+        config.metrics_dir / "generated_vs_real_metrics.csv",
         index=False,
     )
 
     summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
 
     summary.to_csv(
-        metrics_dir / "generated_vs_real_summary.csv",
+        config.metrics_dir / "generated_vs_real_summary.csv",
     )
 
 
 def calculate_pairwise_variety_metrics(
     ct_groups: dict[str, list[Path]],
-    metrics_dir: Path,
+    config: MaisiTestingConfig,
     output_filename: str,
     comparison_type: str,
-    use_lpips: bool = True,
-    lpips_net: str = "alex",
-    max_lpips_slices: int = 16,
-    device: str = "cuda",
 ) -> None:
     """
     Calculate pairwise variety metrics within groups of CT images.
@@ -906,8 +880,8 @@ def calculate_pairwise_variety_metrics(
     ct_groups : dict[str, list[Path]]
         Dictionary mapping patient IDs to CT tensor paths.
 
-    metrics_dir : Path
-        Directory where metric CSV files will be saved.
+    config : MaisiTestingConfig
+        Configuration object containing evaluation settings.
 
     output_filename : str
         Name of the per-comparison output CSV file.
@@ -915,18 +889,6 @@ def calculate_pairwise_variety_metrics(
     comparison_type : str
         Label describing the comparison type, e.g.:
         "generated_vs_generated" or "real_vs_real".
-
-    use_lpips : bool
-        Whether to calculate LPIPS.
-
-    lpips_net : str
-        LPIPS backbone name, e.g. "alex", "vgg", or "squeeze".
-
-    max_lpips_slices : int
-        Maximum number of center slices used for LPIPS.
-
-    device : str
-        Device used for LPIPS calculation. Usually "cuda" or "cpu".
 
     Raises
     ------
@@ -940,24 +902,17 @@ def calculate_pairwise_variety_metrics(
     if len(ct_groups) == 0:
         raise ValueError("`ct_groups` cannot be empty")
 
-    if max_lpips_slices < 1:
-        raise ValueError("`max_lpips_slices` must be at least 1")
-
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-
-    torch_device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
-
     lpips_model = None
 
-    if use_lpips:
+    if config.use_lpips:
         try:
             import lpips
 
-            lpips_model = lpips.LPIPS(net=lpips_net).to(torch_device)
+            lpips_model = lpips.LPIPS(net=config.lpips_net).to(config.device)
             lpips_model.eval()
         except ImportError:
             print("LPIPS package not installed. Skipping LPIPS")
-            use_lpips = False
+            config.use_lpips = False
 
     rows = []
 
@@ -967,8 +922,16 @@ def calculate_pairwise_variety_metrics(
             continue
 
         for path_a, path_b in itertools.combinations(paths, 2):
-            arr_a = _to_numpy_01(_load_tensor(path_a))
-            arr_b = _to_numpy_01(_load_tensor(path_b))
+            arr_a = _to_numpy_01(
+                _load_tensor(path_a),
+                data_min=config.data_min,
+                data_max=config.data_max,
+            )
+            arr_b = _to_numpy_01(
+                _load_tensor(path_b),
+                data_min=config.data_min,
+                data_max=config.data_max,
+            )
 
             if arr_a.shape != arr_b.shape:
                 print(
@@ -988,13 +951,12 @@ def calculate_pairwise_variety_metrics(
                 "sob": sob_3d(arr_a, arr_b),
             }
 
-            if use_lpips and lpips_model is not None:
+            if config.use_lpips and lpips_model is not None:
                 row["lpips"] = lpips_3d(
                     pred=arr_a,
                     ref=arr_b,
                     lpips_model=lpips_model,
-                    device=torch_device,
-                    max_slices=max_lpips_slices,
+                    config=config,
                 )
             else:
                 row["lpips"] = np.nan
@@ -1007,22 +969,18 @@ def calculate_pairwise_variety_metrics(
     df = pd.DataFrame(rows)
 
     df.to_csv(
-        metrics_dir / output_filename,
+        config.metrics_dir / output_filename,
         index=False,
     )
 
     summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
 
     summary_name = output_filename.replace(".csv", "_summary.csv")
-    summary.to_csv(metrics_dir / summary_name)
+    summary.to_csv(config.metrics_dir / summary_name)
 
 
 def evaluate_generated_cts(
-    generated_ct_dir: Path,
-    original_ct_dir: Path,
-    metrics_dir: Path,
-    use_lpips: bool = True,
-    device: str = "cuda",
+    config: MaisiTestingConfig,
 ) -> None:
     """
     Run full CT generation evaluation.
@@ -1044,20 +1002,11 @@ def evaluate_generated_cts(
 
     Parameters
     ----------
-    generated_ct_dir : Path
-        Directory containing generated CT tensors.
-
-    original_ct_dir : Path
-        Directory containing original/reference CT tensors.
-
-    metrics_dir : Path
-        Directory where metric CSV files will be saved.
+    config : MaisiTestingConfig
+        Configuration object containing evaluation settings.
 
     use_lpips : bool
         Whether to calculate LPIPS.
-
-    device : str
-        Device used for LPIPS calculation. Usually "cuda" or "cpu".
 
     Raises
     ------
@@ -1068,33 +1017,23 @@ def evaluate_generated_cts(
         If no valid comparisons can be calculated.
     """
 
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-
-    generated = collect_generated_cts(generated_ct_dir)
-    originals = collect_original_cts(original_ct_dir)
+    generated = collect_generated_cts(config.generated_ct_dir)
+    originals = collect_original_cts(config.processed_ct_dir)
 
     calculate_similarity_metrics(
-        generated_ct_dir=generated_ct_dir,
-        original_ct_dir=original_ct_dir,
-        metrics_dir=metrics_dir,
-        use_lpips=use_lpips,
-        device=device,
+        config=config,
     )
 
     calculate_pairwise_variety_metrics(
         ct_groups=generated,
-        metrics_dir=metrics_dir,
+        config=config,
         output_filename="generated_pairwise_variety_metrics.csv",
         comparison_type="generated_vs_generated",
-        use_lpips=use_lpips,
-        device=device,
     )
 
     calculate_pairwise_variety_metrics(
         ct_groups=originals,
-        metrics_dir=metrics_dir,
+        config=config,
         output_filename="real_pairwise_variety_metrics.csv",
         comparison_type="real_vs_real",
-        use_lpips=use_lpips,
-        device=device,
     )
