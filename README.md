@@ -13,7 +13,7 @@ This project is developed by a team of students:
 | Name | GitHub | Role |
 | :--- | :--- | :--- |
 | **Wiktoria Arendarczyk** | [![GitHub](https://img.shields.io/badge/-MagicWiqqu-181717?style=flat&logo=github)](https://github.com/MagicWiqqu) | Lead Researcher|
-| **Zuzanna Deszcz** | [![GitHub](https://img.shields.io/badge/-melliegrant-181717?style=flat&logo=github)](https://github.com/melliegrant) | Researcher |
+| **Zuzanna Deszcz** | [![GitHub](https://img.shields.io/badge/-melliegrant-181717?style=flat&logo=github)](https://github.com/melliegrant) | Supporting Researcher |
 | **Cezary Moskal** | [![GitHub](https://img.shields.io/badge/-Couch--bit-181717?style=flat&logo=github)](https://github.com/Couch-bit) | Researcher |
 
 ## Applications
