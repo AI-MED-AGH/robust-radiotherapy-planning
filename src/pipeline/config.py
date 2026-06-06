@@ -1,3 +1,6 @@
+# NOTICE: This file utilizes configurations derived from: https://huggingface.co/nvidia/NV-Generate-CT
+# Licensed by NVIDIA Corporation under the NVIDIA Open Model License.
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal

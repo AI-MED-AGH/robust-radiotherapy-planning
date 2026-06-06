@@ -25,3 +25,11 @@ This framework enables:
 3. **Uncertainty quantification**: Quantify dose uncertainty due to anatomical variations.
 4. **Quality assurance**: Validate delivered dose against predicted variations.
 5. **Research**: Study inter-fraction anatomical changes and their dosimetric impact.
+
+## Acknowledgments & Licensing
+
+The source code in this repository is licensed under the [MIT License](LICENSE). 
+
+This project utilizes model configurations and pre-trained weights derived from [NV-Generate-CT](https://huggingface.co/nvidia/NV-Generate-CT). To run some parts of the code, you must download these assets directly from the original source and place them in your local directory.
+
+Please note that these external assets are licensed by NVIDIA Corporation under the **NVIDIA Open Model License**.
