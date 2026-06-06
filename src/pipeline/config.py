@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -82,13 +82,22 @@ class MaisiTestingConfig:
         Number of rectified-flow sampling steps.
 
     latent_scale : float
-        Scaling factor applied to latent representations.
+        Scaling factor applied to latent representations..
 
     device : str
-        Device used during inference (e.g. "cuda" or "cpu").
+        Device used for model inference ("cuda" or "cpu").
 
     spacing : tuple[float, float, float]
         Target voxel spacing used during preprocessing.
+
+    data_min : float
+        Minimum CT intensity value used for normalization and clipping.
+
+    data_max : float
+        Maximum CT intensity value used for normalization and clipping.
+
+    target_image_size : tuple[int, int, int]
+        Target image size (height, width, depth) after preprocessing.
 
     chunk_size_encoder : int
         Core sliding-window chunk size used during VAE encoding.
@@ -97,22 +106,23 @@ class MaisiTestingConfig:
         Core sliding-window chunk size used during VAE decoding.
 
     halo_encoder : int
-        Halo size added around encoder chunks to reduce boundary artifacts.
+        Halo size added around encoder chunks to remove boundary artifacts.
 
     halo_decoder : int
-        Halo size added around decoder chunks to reduce boundary artifacts.
+        Halo size added around decoder chunks to remove boundary artifacts.
 
     encoder_decoder_factor : int
         Spatial scaling factor of the VAE encoder.
         Converts image space to latent space.
 
-    encoder_image_size : int
-        Height and width of the encoder input image space on which
-        sliding-window inference is performed.
+    use_lpips : bool
+        Whether to calculate the LPIPS metric during evaluation.
 
-    decoder_image_size : int
-        Height and width of the decoder latent space on which
-        sliding-window inference is performed.
+    lpips_net : Literal["alex", "vgg", "squeeze"]
+        Backbone network to use for LPIPS calculation.
+
+    max_lpips_slices : int
+        Maximum number of slices to use for LPIPS calculation per volume.
 
     vae_config : dict | None
         VAE architecture configuration.
@@ -165,8 +175,8 @@ class MaisiTestingConfig:
     # Model weights
     weights_dir: Path = Path("src/pipeline/weights")
 
-    vae_weight_path: Path = weights_dir / "autoencoder_v1.pt"
-    rflow_weight_path: Path = weights_dir / "diff_unet_3d_rflow-ct.pt"
+    vae_weight_path: Path = weights_dir / "autoencoder.pt"
+    rflow_weight_path: Path = weights_dir / "diff_unet.pt"
 
     # Inference config
     cts_per_patient: int = 1
@@ -176,6 +186,13 @@ class MaisiTestingConfig:
 
     # MAISI-specific config
     spacing: tuple[float, float, float] = (1.171875, 1.171875, 3.0)
+
+    # CT intensity normalization range
+    data_min: float = -1000.0
+    data_max: float = 1500.0
+
+    # Target image size after preprocessing (height, width, depth)
+    target_image_size: tuple[int, int, int] = (512, 512, 128)
 
     # Custom sliding-window inference
     # Chunk size c means the sliding window is c x c x d,
@@ -192,11 +209,10 @@ class MaisiTestingConfig:
     # Decoder: latent space -> image space, *4
     encoder_decoder_factor: int = 4
 
-    # H/W size in the space where sliding is performed.
-    # Encoder receives CTs after preprocessing: 512 x 512 x 128.
-    # Decoder receives latents: 128 x 128 x 32.
-    encoder_image_size: int = 512
-    decoder_image_size: int = 128
+    # Lpips arguments
+    use_lpips: bool = True
+    lpips_net: Literal["alex", "vgg", "squeeze"] = "alex"
+    max_lpips_slices: int = 16
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict[str, Any] | None = None
@@ -306,6 +322,11 @@ class MaisiTestingConfig:
         if any(value <= 0 for value in self.spacing):
             raise ValueError("All `spacing` values must be greater than 0")
 
+        if self.data_min >= self.data_max:
+            raise ValueError(
+                f"`data_min` must be smaller than `data_max`. Got data_min={self.data_min}, data_max={self.data_max}"
+            )
+
         if self.chunk_size_encoder <= 0:
             raise ValueError("`chunk_size_encoder` must be greater than 0")
 
@@ -321,32 +342,47 @@ class MaisiTestingConfig:
         if self.encoder_decoder_factor <= 0:
             raise ValueError("`encoder_decoder_factor` must be greater than 0")
 
-        if self.encoder_image_size <= 0:
-            raise ValueError("`encoder_image_size` must be greater than 0")
-
-        if self.decoder_image_size <= 0:
-            raise ValueError("`decoder_image_size` must be greater than 0")
-
-        if self.encoder_image_size % self.chunk_size_encoder != 0:
-            raise ValueError(
-                "`encoder_image_size` must be divisible by `chunk_size_encoder`. "
-                f"Got encoder_image_size={self.encoder_image_size}, "
-                f"chunk_size_encoder={self.chunk_size_encoder}"
-            )
-
-        if self.decoder_image_size % self.chunk_size_decoder != 0:
-            raise ValueError(
-                "`decoder_image_size` must be divisible by `chunk_size_decoder`. "
-                f"Got decoder_image_size={self.decoder_image_size}, "
-                f"chunk_size_decoder={self.chunk_size_decoder}"
-            )
-
         if self.chunk_size_encoder % self.encoder_decoder_factor != 0:
             raise ValueError(
                 "`chunk_size_encoder` must be divisible by `encoder_decoder_factor`. "
                 f"Got chunk_size_encoder={self.chunk_size_encoder}, "
                 f"encoder_decoder_factor={self.encoder_decoder_factor}"
             )
+
+        if len(self.target_image_size) != 3:
+            raise ValueError(
+                f"`target_image_size` must contain exactly 3 values (H, W, D). Got {self.target_image_size}"
+            )
+
+        if any(size <= 0 for size in self.target_image_size):
+            raise ValueError(f"`target_image_size` values must be greater than 0. Got {self.target_image_size}")
+
+        if self.target_image_size[0] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image height must be divisible by "
+                f"`encoder_decoder_factor`. Got height={self.target_image_size[0]}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if self.target_image_size[1] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image width must be divisible by "
+                f"`encoder_decoder_factor`. Got width={self.target_image_size[1]}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if self.target_image_size[2] % self.encoder_decoder_factor != 0:
+            raise ValueError(
+                "Target image depth must be divisible by "
+                f"`encoder_decoder_factor`. Got depth={self.target_image_size[2]}, "
+                f"encoder_decoder_factor={self.encoder_decoder_factor}"
+            )
+
+        if self.max_lpips_slices < 1:
+            raise ValueError("`max_lpips_slices` must be at least 1")
+
+        if self.lpips_net not in {"alex", "vgg", "squeeze"}:
+            raise ValueError(f"`lpips_net` must be one of: 'alex', 'vgg', 'squeeze'. Got {self.lpips_net}")
 
     def _set_default_vae_config(self) -> None:
         """

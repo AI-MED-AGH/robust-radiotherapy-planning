@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.inference.encode_latents import _resolve_device, load_vae_model
+from src.pipeline.inference.encode_latents import load_vae_model
 
 
 @dataclass
@@ -174,14 +174,16 @@ def decode_latent_to_ct(
 
     The latent tensor is decoded using the MAISI VAE decoder with
     sliding-window inference. The decoded image is then mapped back from
-    the normalized range [0, 1] to an HU-like range [-1000, 1000].
+    the normalized range [0, 1] to the CT intensity range defined in the
+    pipeline configuration.
 
     Assumptions:
     - `z_t` is a generated latent tensor.
     - `vae_model.decode` maps latent tensors back to normalized CT space.
-    - CT intensities were previously scaled from [-1000, 1000] to [0, 1].
+    - CT intensities were previously scaled from
+    [`config.data_min`, `config.data_max`] to [0, 1].
     - The inverse transformation is:
-        HU = 2000 * x - 1000
+        CT = (config.data_max - config.data_min) * x + config.data_min
 
     Parameters
     ----------
@@ -192,29 +194,29 @@ def decode_latent_to_ct(
         Loaded MAISI VAE model.
 
     config : MaisiTestingConfig
-        Configuration object containing decoder window size and inference
-        settings.
+        Configuration object containing decoder window size, inference settings,
+        and CT intensity range values.
 
     Returns
     -------
     reconstructed_ct : torch.Tensor
-        Generated CT tensor in HU-like range, clipped to [-1000, 1000].
+        Generated CT tensor mapped back to the configured CT intensity range and
+        clipped to [`config.data_min`, `config.data_max`].
     """
 
     reconstructed_ct = sliding_window_inference(
         image=z_t,
         chunk_size=config.chunk_size_decoder,
         halo_size=config.halo_decoder,
-        image_size=config.decoder_image_size,
         model=vae_model.decode,
         model_type="decoder",
         factor=config.encoder_decoder_factor,
     )
 
     reconstructed_ct = torch.clamp(
-        2000 * reconstructed_ct - 1000,
-        min=-1000,
-        max=1000,
+        (config.data_max - config.data_min) * reconstructed_ct + config.data_min,
+        min=config.data_min,
+        max=config.data_max,
     )
 
     return reconstructed_ct
@@ -255,7 +257,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         If scheduler config is missing required settings.
     """
 
-    device = _resolve_device(config)
+    device = torch.device(config.device)
 
     if config.scheduler_config is None:
         raise ValueError("`config.scheduler_config` cannot be None")

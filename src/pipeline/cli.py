@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
@@ -43,13 +44,6 @@ def parse_args() -> argparse.Namespace:
         "stage",
         choices=["prepare", "encode", "generate", "evaluate", "all"],
         help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', or 'all'"),
-    )
-
-    parser.add_argument(
-        "--device",
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device used for inference.",
     )
 
     parser.add_argument(
@@ -126,29 +120,30 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         If required CLI arguments are missing from `args`.
     """
 
-    config = MaisiTestingConfig(
-        validate_paths=not args.no_validate_paths,
-        device=args.device,
-        cts_per_patient=args.cts_per_patient,
-        steps=args.steps,
-    )
+    config_kwargs = {
+        "validate_paths": not args.no_validate_paths,
+        "cts_per_patient": args.cts_per_patient,
+        "steps": args.steps,
+        "use_lpips": not args.no_lpips,
+    }
 
     if args.generated_ct_dir is not None:
-        config.generated_ct_dir = args.generated_ct_dir
+        config_kwargs["generated_ct_dir"] = args.generated_ct_dir
 
     if args.processed_ct_dir is not None:
-        config.processed_ct_dir = args.processed_ct_dir
+        config_kwargs["processed_ct_dir"] = args.processed_ct_dir
 
     if args.metrics_dir is not None:
-        config.metrics_dir = args.metrics_dir
+        config_kwargs["metrics_dir"] = args.metrics_dir
+
+    config = MaisiTestingConfig(**config_kwargs)
 
     return config
 
 
 def run_stage(
-    stage: str,
+    stage: Literal["prepare", "encode", "generate", "evaluate", "all"],
     config: MaisiTestingConfig,
-    use_lpips: bool,
 ) -> None:
     """
     Run one selected MAISI testing pipeline stage.
@@ -162,14 +157,11 @@ def run_stage(
 
     Parameters
     ----------
-    stage : str
+    stage : Literal["prepare", "encode", "generate", "evaluate", "all"]
         Pipeline stage to run.
 
     config : MaisiTestingConfig
         Pipeline configuration object.
-
-    use_lpips : bool
-        Whether to calculate LPIPS during evaluation.
 
     Raises
     ------
@@ -187,25 +179,13 @@ def run_stage(
         generate_ct_variants(config)
 
     elif stage == "evaluate":
-        evaluate_generated_cts(
-            generated_ct_dir=config.generated_ct_dir,
-            original_ct_dir=config.processed_ct_dir,
-            metrics_dir=config.metrics_dir,
-            use_lpips=use_lpips,
-            device=config.device,
-        )
+        evaluate_generated_cts(config)
 
     elif stage == "all":
         prepare_test_data(config)
         encode_latents(config)
         generate_ct_variants(config)
-        evaluate_generated_cts(
-            generated_ct_dir=config.generated_ct_dir,
-            original_ct_dir=config.processed_ct_dir,
-            metrics_dir=config.metrics_dir,
-            use_lpips=use_lpips,
-            device=config.device,
-        )
+        evaluate_generated_cts(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")
@@ -231,7 +211,6 @@ def main() -> None:
     run_stage(
         stage=args.stage,
         config=config,
-        use_lpips=not args.no_lpips,
     )
 
 

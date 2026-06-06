@@ -240,7 +240,7 @@ def encode_latents(config: MaisiTestingConfig) -> None:
         If the VAE checkpoint is incompatible with the VAE config.
     """
 
-    device = _resolve_device(config)
+    device = torch.device(config.device)
 
     config.latent_ct_dir.mkdir(parents=True, exist_ok=True)
 
@@ -251,7 +251,6 @@ def encode_latents(config: MaisiTestingConfig) -> None:
 
     loader = build_processed_ct_loader(
         config=config,
-        batch_size=1,
     )
 
     def vae_encoder_wrapper(image_patch: torch.Tensor) -> torch.Tensor:
@@ -281,7 +280,6 @@ def encode_latents(config: MaisiTestingConfig) -> None:
                 image=batch["image"].to(device, non_blocking=True),
                 chunk_size=config.chunk_size_encoder,
                 halo_size=config.halo_encoder,
-                image_size=config.encoder_image_size,
                 model=vae_encoder_wrapper,
                 model_type="encoder",
                 factor=config.encoder_decoder_factor,
@@ -291,26 +289,3 @@ def encode_latents(config: MaisiTestingConfig) -> None:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
             torch.save(encoded_ct[0, ...].cpu(), save_path)
-
-
-def _resolve_device(config: MaisiTestingConfig) -> torch.device:
-    """
-    Resolve inference device from config.
-
-    If `config.device` is "cuda" but CUDA is unavailable, CPU is used instead.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Configuration object containing selected device.
-
-    Returns
-    -------
-    device : torch.device
-        Resolved torch device.
-    """
-
-    if config.device == "cuda" and not torch.cuda.is_available():
-        return torch.device("cpu")
-
-    return torch.device(config.device)

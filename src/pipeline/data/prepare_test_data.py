@@ -18,7 +18,7 @@ from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
 
 
-def get_ct_preprocessing_transform() -> Compose:
+def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
     """
     Create preprocessing transform for MAISI planning CT inference.
 
@@ -26,7 +26,7 @@ def get_ct_preprocessing_transform() -> Compose:
     - loads a CT image from disk
     - ensures channel-first format
     - reorients image to RAS
-    - clips and scales HU values from [-1000, 1000] to [0, 1]
+    - clips and scales HU values from [data_min, data_max] to [0, 1]
     - pads image to a fixed spatial size
     - center-crops image to a fixed spatial size
     - converts the output to a torch float32 tensor
@@ -44,21 +44,21 @@ def get_ct_preprocessing_transform() -> Compose:
             Orientationd(keys="image", axcodes="RAS", labels=None),
             ScaleIntensityRanged(
                 keys="image",
-                a_min=-1000,
-                a_max=1000,
+                a_min=config.data_min,
+                a_max=config.data_max,
                 b_min=0,
                 b_max=1,
                 clip=True,
             ),
             SpatialPadd(
                 keys="image",
-                spatial_size=(512, 512, 128),
+                spatial_size=config.target_image_size,
                 mode="constant",
                 constant_values=0,
             ),
             CenterSpatialCropd(
                 keys="image",
-                roi_size=(512, 512, 128),
+                roi_size=config.target_image_size,
             ),
             EnsureTyped(keys="image", dtype=torch.float32),
         ]
@@ -163,7 +163,7 @@ def process_and_save_planning_cts(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    transform = get_ct_preprocessing_transform()
+    transform = get_ct_preprocessing_transform(config)
     planning_ct_paths = _extract_planning_ct_paths(data_path_list)
 
     if len(planning_ct_paths) == 0:
