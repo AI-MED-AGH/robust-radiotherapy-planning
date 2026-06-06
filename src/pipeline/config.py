@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -115,19 +115,11 @@ class MaisiTestingConfig:
         Spatial scaling factor of the VAE encoder.
         Converts image space to latent space.
 
-    encoder_image_size : int
-        Height and width of the encoder input image space on which
-        sliding-window inference is performed.
-
-    decoder_image_size : int
-        Height and width of the decoder latent space on which
-        sliding-window inference is performed.
-
     use_lpips : bool
         Whether to calculate the LPIPS metric during evaluation.
 
-    lpips_net : str
-        Which backbone network to use for LPIPS calculation.
+    lpips_net : Literal["alex", "vgg", "squeeze"]
+        Backbone network to use for LPIPS calculation.
 
     max_lpips_slices : int
         Maximum number of slices to use for LPIPS calculation per volume.
@@ -217,15 +209,9 @@ class MaisiTestingConfig:
     # Decoder: latent space -> image space, *4
     encoder_decoder_factor: int = 4
 
-    # H/W size in the space where sliding is performed.
-    # Encoder receives CTs after preprocessing: 512 x 512 x 128.
-    # Decoder receives latents: 128 x 128 x 32.
-    encoder_image_size: int = 512
-    decoder_image_size: int = 128
-
     # Lpips arguments
     use_lpips: bool = True
-    lpips_net: str = "alex"
+    lpips_net: Literal["alex", "vgg", "squeeze"] = "alex"
     max_lpips_slices: int = 16
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
@@ -355,26 +341,6 @@ class MaisiTestingConfig:
 
         if self.encoder_decoder_factor <= 0:
             raise ValueError("`encoder_decoder_factor` must be greater than 0")
-
-        if self.encoder_image_size <= 0:
-            raise ValueError("`encoder_image_size` must be greater than 0")
-
-        if self.decoder_image_size <= 0:
-            raise ValueError("`decoder_image_size` must be greater than 0")
-
-        if self.encoder_image_size % self.chunk_size_encoder != 0:
-            raise ValueError(
-                "`encoder_image_size` must be divisible by `chunk_size_encoder`. "
-                f"Got encoder_image_size={self.encoder_image_size}, "
-                f"chunk_size_encoder={self.chunk_size_encoder}"
-            )
-
-        if self.decoder_image_size % self.chunk_size_decoder != 0:
-            raise ValueError(
-                "`decoder_image_size` must be divisible by `chunk_size_decoder`. "
-                f"Got decoder_image_size={self.decoder_image_size}, "
-                f"chunk_size_decoder={self.chunk_size_decoder}"
-            )
 
         if self.chunk_size_encoder % self.encoder_decoder_factor != 0:
             raise ValueError(
