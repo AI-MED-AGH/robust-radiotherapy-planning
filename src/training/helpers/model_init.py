@@ -70,6 +70,7 @@ def unet_init(config: MaisiTrainingConfig) -> DiffusionModelUNetMaisi:
     ------
     RuntimeError
         If the foundation weight file fails to load into memory via PyTorch.
+
     KeyError
         If required keys ('unet_state_dict' or 'conv_in.conv.weight') are missing from
         the checkpoint or the target model state dictionaries.
@@ -87,18 +88,18 @@ def unet_init(config: MaisiTrainingConfig) -> DiffusionModelUNetMaisi:
 
     if "unet_state_dict" not in checkpoint:
         raise KeyError(
-            f"The loaded checkpoint at {config.rflow_foundation_weights} is missing the required 'unet_state_dict' key."
+            f"The loaded checkpoint at {config.rflow_foundation_weights} is missing the required 'unet_state_dict' key"
         )
 
     rflow_state_dict = checkpoint["unet_state_dict"]
     first_layer_key = "conv_in.conv.weight"
 
     if first_layer_key not in rflow_state_dict:
-        raise KeyError(f"The key '{first_layer_key}' was not found within the loaded 'unet_state_dict'.")
+        raise KeyError(f"The key '{first_layer_key}' was not found within the loaded 'unet_state_dict'")
 
     model_state = model.state_dict()
     if first_layer_key not in model_state:
-        raise KeyError(f"The key '{first_layer_key}' is missing from the initialized UNet model architecture.")
+        raise KeyError(f"The key '{first_layer_key}' is missing from the initialized UNet model architecture")
 
     pretrained_weights = rflow_state_dict[first_layer_key]
     target_shape = model_state[first_layer_key].shape

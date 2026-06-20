@@ -359,7 +359,7 @@ def train(config: MaisiTrainingConfig) -> None:
             raw_state = (
                 cast(DiffusionModelUNetMaisi, model.module).state_dict() if is_distributed else model.state_dict()
             )
-            current_model_wts = {k: v.cpu() for k, v in raw_state.items()}
+            current_model_wts = {k: v.detach().cpu().clone() for k, v in raw_state.items()}
             if rank == 0:
                 try:
                     torch.save(current_model_wts, config.rflow_weights_path / f"epoch_{epoch}.pt")

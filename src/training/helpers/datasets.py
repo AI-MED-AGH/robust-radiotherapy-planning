@@ -36,7 +36,6 @@ class PatientFractionPairDataset(Dataset[dict[str, torch.Tensor]]):
         self.pairs = []
 
         # Regex to capture patient_id and fraction_id
-        # Handles both numeric and alphanumeric patient IDs
         filename_pattern = re.compile(r"Patient_(\d+)_fraction_(\d+)_\.pt")
 
         fraction_ones = {}

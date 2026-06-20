@@ -1,7 +1,5 @@
 import glob
 import os
-from collections.abc import Hashable
-from typing import Any
 
 import torch
 from monai.data import Dataset, ThreadDataLoader  # type: ignore[attr-defined]
@@ -11,7 +9,6 @@ from monai.transforms import (  # type: ignore[attr-defined]
     EnsureChannelFirstd,
     EnsureTyped,
     LoadImaged,
-    MapTransform,
     Orientationd,
     RandSpatialCropd,
     ScaleIntensityRanged,
@@ -19,32 +16,8 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 from torch.utils.data.distributed import DistributedSampler
 
+from src.data_utils import LoadProcessedTensord
 from src.training.helpers.config import MaisiTrainingConfig
-
-
-class LoadProcessedTensord(MapTransform):
-    """
-    Dictionary-based transform to load preprocessed PyTorch tensor files (.pt).
-
-    Parameters
-    ----------
-    keys : KeysCollection
-        Keys of the corresponding items to be transformed.
-    allow_missing_keys : bool
-        Don't raise exception if key is missing.
-    """
-
-    def __call__(self, data: dict[Hashable, Any]) -> dict[Hashable, Any]:
-        d = dict(data)
-        for key in self.keys:
-            try:
-                # Load the .pt file directly into memory
-                # weights_only=True helps with security/speed
-                d[key] = torch.load(d[key], weights_only=True)
-            except Exception as err:
-                raise RuntimeError(f"Failed to load preprocessed tensor file from path: {d[key]}") from err
-
-        return d
 
 
 def get_ct_preprocessing_transform(config: MaisiTrainingConfig) -> Compose:
@@ -67,6 +40,9 @@ def get_ct_preprocessing_transform(config: MaisiTrainingConfig) -> Compose:
             LoadImaged(keys=["image"]),
             EnsureChannelFirstd(keys=["image"]),
             Orientationd(keys=["image"], axcodes="RAS", labels=None),
+            # This order of operations makes it so the image is padded with water and not air.
+            # A lot of what would have been in the image in the padded space is unknown,
+            # so whether it's filled with water or air does not matter too much.
             SpatialPadd(
                 keys=["image"],
                 spatial_size=config.image_size,

@@ -14,6 +14,28 @@ class MaisiTrainingConfig:
     This class maintains, normalizes, and validates spatial, intensity, hyperparameter,
     and filesystem structural requirements for both VAE and U-Net optimization tasks.
 
+    Assumptions
+    -----------
+    - This class lives inside the `src/` package.
+    - Full CT data is stored in:
+        src/data_full/CT/Patient_x/...
+    - Each patient folder contains longitudinal CT fractions:
+        Patient_<id>_fraction_1_.nii.gz
+        Patient_<id>_fraction_2_.nii.gz
+        ...
+    - Fraction 1 is treated as the planning CT (conditioning CT).
+    - Training is performed on scans processed to have fixed image size and a range of [0, 1].
+    These are saved in float32 (important due to precision needs) to .pt files.
+    - MAISI model weights are stored in (the resulting ones and the ones used for warm starting):
+        RESULTS/weights/
+
+    Pipeline stages
+    ---------------
+    1. Prepare CT data for training by convering it to .pt format (`prepare_data.py`).
+    2. Train the VAE (`train_vae.py`).
+    3. Encode CTs into the latent space using the VAE (`encode_data.py`).
+    4. Train the Rectified Flow U-Net (`train_rflow.py`).
+
     Parameters
     ----------
     data_dict_path : Path
@@ -122,7 +144,7 @@ class MaisiTrainingConfig:
         Number of epochs to run for Rectified Flow training.
 
     rflow_foundation_weights : Path
-        Path to the MAISI weights
+        Path to the MAISI weights.
 
     rflow_weights_path : Path
         Directory in which to periodically save smoothed Rectified Flow weights in.

@@ -154,7 +154,7 @@ def load_checkpoint(
         raise RuntimeError("Failed to remap saved state dictionary weights onto the current model components") from err
 
     # Keep the best model weights on CPU to avoid unnecessary VRAM usage
-    best_model_wts_cpu = {k: v.cpu() for k, v in checkpoint["best_model_dict"].items()}
+    best_model_wts_cpu = {k: v.detach().cpu().clone() for k, v in checkpoint["best_model_dict"].items()}
 
     return (
         checkpoint["epoch"],
@@ -367,6 +367,11 @@ def train(config: MaisiTrainingConfig) -> None:
                 "adv_loss": generator_loss * config.adv_weight,
             }
             loss_g = torch.stack(list(losses_train.values())).sum(dim=0)
+
+            # This actually also passes gradients to the discriminator network.
+            # This is unchanged from MAISI which also does this.
+            # It's likely a mistake, but changing it would mean having to retune the model.
+            # Even after tuning, the results could still be worse than this architecture.
             loss_g.backward()  # type: ignore
             optimizer_g.step()
 
@@ -463,9 +468,9 @@ def train(config: MaisiTrainingConfig) -> None:
 
                 # Only Rank 0 saves the actual weights to memory
                 if rank == 0:
-                    # Keep the best model weights on CPU to avoid uncessary VRAM usage
+                    # Keep the best model weights on CPU to avoid unnecessary VRAM usage
                     raw_model = cast(AutoencoderKlMaisi, autoencoder.module) if is_distributed else autoencoder
-                    best_model_wts = {k: v.cpu() for k, v in raw_model.state_dict().items()}
+                    best_model_wts = {k: v.detach().cpu().clone() for k, v in raw_model.state_dict().items()}
             else:
                 epochs_no_improve += config.val_interval
                 # EVERY rank breaks simultaneously
