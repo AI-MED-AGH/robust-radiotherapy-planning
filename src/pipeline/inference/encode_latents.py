@@ -1,62 +1,17 @@
 import glob
 import os
 from pathlib import Path
-from typing import Any, cast
 
 import torch
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import (
     AutoencoderKlMaisi,
 )
 from monai.data import Dataset, ThreadDataLoader  # type: ignore[attr-defined]
-from monai.transforms import Compose, EnsureTyped, MapTransform  # type: ignore[attr-defined]
+from monai.transforms import Compose, EnsureTyped  # type: ignore[attr-defined]
 from tqdm import tqdm
 
-from src.data_utils import sliding_window_inference
+from src.data_utils import LoadProcessedTensord, sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-
-
-class LoadProcessedTensord(MapTransform):
-    """
-    Load processed CT tensors saved as `.pt` files.
-
-    This transform is used after the preprocessing step, where planning CTs
-    are already loaded, scaled, cropped/padded, and saved as torch tensors.
-
-    Assumptions:
-    - Input files are `.pt` tensors.
-    - Each file contains one processed planning CT.
-    - The tensor was created by `prepare_test_data.py`.
-    - The dictionary contains keys listed in `self.keys`.
-
-    Parameters
-    ----------
-    keys : list[str]
-        Dictionary keys pointing to `.pt` tensor files.
-
-    Returns
-    -------
-    d : dict
-        Dictionary with loaded torch tensors replacing file paths.
-
-    Raises
-    ------
-    FileNotFoundError
-        If a tensor file does not exist.
-    """
-
-    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
-        d = dict(data)
-
-        for key in self.keys:
-            key_str = cast(str, key)
-            tensor_path = Path(d[key_str])
-
-            if not tensor_path.exists():
-                raise FileNotFoundError(f"Processed CT tensor does not exist: {tensor_path}")
-
-            d[key_str] = torch.load(tensor_path, weights_only=True)
-
-        return d
 
 
 def load_vae_model(

@@ -5,3 +5,4 @@
 | **[setup.md](setup.md)** | Environment setup and tools|
 | **[contribution.md](contribution.md)** | Contribution rules|
 | **[data.md](data.md)** | Data structure and processing|
+| **[training.md](training.md)** | Training scripts|

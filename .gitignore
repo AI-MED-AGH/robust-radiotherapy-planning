@@ -22,3 +22,6 @@ __pycache__/
 # Ignore notebook data
 /notebooks/data
 /notebooks/models
+
+# Ignore wandb results
+/wandb/

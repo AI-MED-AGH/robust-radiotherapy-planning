@@ -3,11 +3,56 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from monai.transforms import MapTransform  # type: ignore[attr-defined]
+
+
+class LoadProcessedTensord(MapTransform):
+    """
+    Load processed CT tensors saved as `.pt` files.
+
+    This transform is used after the preprocessing step, where planning CTs
+    are already loaded, scaled, cropped/padded, and saved as torch tensors.
+
+    Assumptions:
+    - Input files are `.pt` tensors.
+    - Each file contains one processed planning CT.
+    - The tensor was created by `prepare_test_data.py`.
+    - The dictionary contains keys listed in `self.keys`.
+
+    Parameters
+    ----------
+    keys : list[str]
+        Dictionary keys pointing to `.pt` tensor files.
+
+    Returns
+    -------
+    d : dict
+        Dictionary with loaded torch tensors replacing file paths.
+
+    Raises
+    ------
+    FileNotFoundError
+        If a tensor file does not exist.
+    """
+
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+        d = dict(data)
+
+        for key in self.keys:
+            key_str = cast(str, key)
+            tensor_path = Path(d[key_str])
+
+            if not tensor_path.exists():
+                raise FileNotFoundError(f"Processed CT tensor does not exist: {tensor_path}")
+
+            d[key_str] = torch.load(tensor_path, weights_only=True)
+
+        return d
 
 
 def create_data_split_dict(
