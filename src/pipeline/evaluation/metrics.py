@@ -74,37 +74,43 @@ class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
-def _to_numpy_01(
+def _to_numpy_hu(
     tensor: torch.Tensor,
     data_min: float,
     data_max: float,
 ) -> FloatArray:
     """
-    Convert a CT tensor to a NumPy array normalized to the range [0, 1].
+    Convert a CT tensor to a NumPy array of HU values rounded to the nearest integer.
 
     This helper supports two expected intensity formats:
-    - already preprocessed tensors in the range [0, 1]
+    - tensors normalized to the range [0, 1]
     - HU-like tensors in the range approximately [data_min, data_max]
 
-    If the tensor is already within [0, 1], it is returned unchanged as a
-    float32 NumPy array. Otherwise, values are clipped to [data_min, data_max] and
-    linearly rescaled to [0, 1].
+    If the tensor is already outside hu, it is returned rounded as a
+    float32 NumPy array. Otherwise, values are linearly rescaled from [0, 1] to [data_min, data_max].
 
     Parameters
     ----------
     tensor : torch.Tensor
         Input CT tensor.
 
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
     Returns
     -------
     arr : np.ndarray
-        CT image as a float32 NumPy array normalized to [0, 1].
+        CT image as a float32 NumPy array normalized to [data_min, data_max].
 
     Raises
     ------
     ValueError
         If `tensor` is empty.
         If `tensor` contains NaN or infinite values.
+        If `data_min` is more than `data_max`.
     """
 
     if tensor.numel() == 0:
@@ -118,13 +124,12 @@ def _to_numpy_01(
 
     arr = tensor.detach().cpu().numpy().astype(np.float32)
 
-    # Case 1: already preprocessed to [0, 1]
-    if arr.min() >= 0.0 and arr.max() <= 1.0:
-        return arr
+    # Case 1: HU-like range [data_min, data_max]
+    if arr.min() < 0.0 or arr.max() > 1.0:
+        return arr.round()
 
-    # Case 2: HU-like range [data_min, data_max]
-    arr = np.clip(arr, data_min, data_max).astype(np.float32)
-    arr = ((arr - data_min) / (data_max - data_min)).astype(np.float32)
+    # Case 2: normalized to [0, 1]
+    arr = ((data_max - data_min) * arr + data_min).astype(np.float32).round()
 
     return arr
 
@@ -239,7 +244,7 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     return float(np.mean(np.abs(pred - ref)))
 
 
-def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
+def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
     """
     Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
 
@@ -247,8 +252,6 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     the average score across all slices. It is intended for comparing
     volumetric medical images such as CT scans while using the standard
     2D SSIM implementation.
-
-    Both input arrays are assumed to be normalized to the range [0, 1].
 
     Parameters
     ----------
@@ -264,10 +267,21 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         Mean SSIM score averaged across all z-axis slices.
         Values closer to 1 indicate higher structural similarity.
 
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
     Raises
     ------
     ValueError
-        If `pred` and `ref` do not have the same shape.
+        If `pred` or `ref` is empty.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` or `ref` contains NaN or infinite values.
+        If `data_min` is greater than `data_max`.
+        If data falls outside of [data_min, data_max].
     """
 
     if pred.size == 0:
@@ -291,11 +305,18 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     if not np.isfinite(ref).all():
         raise ValueError("`ref` contains NaN or infinite values.")
 
-    if pred.min() < 0.0 or pred.max() > 1.0:
-        raise ValueError(f"`pred` values must be in the range [0, 1], got min={pred.min()}, max={pred.max()}")
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
 
-    if ref.min() < 0.0 or ref.max() > 1.0:
-        raise ValueError(f"`ref` values must be in the range [0, 1], got min={ref.min()}, max={ref.max()}")
+    if pred.min() < data_min or pred.max() > data_max:
+        raise ValueError(
+            f"`pred` values must be in the range [data_min, data_max], got min={pred.min()}, max={pred.max()}"
+        )
+
+    if ref.min() < data_min or ref.max() > data_max:
+        raise ValueError(
+            f"`ref` values must be in the range [data_min, data_max], got min={ref.min()}, max={ref.max()}"
+        )
 
     scores = []
 
@@ -308,7 +329,7 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray) -> float:
             ssim(  # type: ignore[no-untyped-call]
                 ref_slice,
                 pred_slice,
-                data_range=1.0,
+                data_range=data_max - data_min,
             ),
         )
         scores.append(score)
@@ -352,9 +373,6 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
 
     if not np.isfinite(arr).all():
         raise ValueError("`arr` contains NaN or infinite values.")
-
-    if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation.")
 
     sx = sobel(arr, axis=0)
     sy = sobel(arr, axis=1)
@@ -527,17 +545,17 @@ def lpips_3d(
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted or generated 3D CT array normalized to [0, 1].
-
-    ref : np.ndarray
-        Reference 3D CT array normalized to [0, 1].
-
     config : MaisiTestingConfig
          Configuration object containing LPIPS settings.
 
     lpips_model : LPIPSModel
         Initialized LPIPS model.
+
+    pred : np.ndarray
+        Predicted or generated 3D CT array normalized to [data_min, data_max].
+
+    ref : np.ndarray
+        Reference 3D CT array normalized to [data_min, data_max].
 
     Returns
     -------
@@ -551,7 +569,7 @@ def lpips_3d(
         If `pred` or `ref` is not 3-dimensional.
         If `pred` and `ref` have different shapes.
         If `pred` or `ref` contains NaN or infinite values.
-        If `pred` or `ref` is not normalized to [0, 1].
+        If `pred` or `ref` is not normalized to [data_min, data_max].
         If `max_slices` is less than 1.
     """
 
@@ -576,19 +594,19 @@ def lpips_3d(
     if not np.isfinite(ref).all():
         raise ValueError("`ref` contains NaN or infinite values")
 
-    if pred.min() < 0.0 or pred.max() > 1.0:
-        raise ValueError("`pred` must be normalized to [0, 1]")
+    if pred.min() < config.data_min or pred.max() > config.data_max:
+        raise ValueError("`pred` must be normalized to [data_min, data_max]")
 
-    if ref.min() < 0.0 or ref.max() > 1.0:
-        raise ValueError("`ref` must be normalized to [0, 1]")
+    if ref.min() < config.data_min or ref.max() > config.data_max:
+        raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
     pred_tensor = _evenly_spaced_slices_for_lpips(
-        pred,
+        (pred - config.data_min) / (config.data_max - config.data_min),
         max_slices=config.max_lpips_slices,
     ).to(config.device)
 
     ref_tensor = _evenly_spaced_slices_for_lpips(
-        ref,
+        (ref - config.data_min) / (config.data_max - config.data_min),
         max_slices=config.max_lpips_slices,
     ).to(config.device)
 
@@ -764,7 +782,6 @@ def calculate_similarity_metrics(
     Raises
     ------
     ValueError
-        If `max_lpips_slices` is less than 1.
         If no valid comparisons can be calculated.
     """
 
@@ -792,14 +809,14 @@ def calculate_similarity_metrics(
             continue
 
         for gen_path in gen_paths:
-            gen_arr = _to_numpy_01(
+            gen_arr = _to_numpy_hu(
                 _load_tensor(gen_path),
                 data_min=config.data_min,
                 data_max=config.data_max,
             )
 
             for ref_path in ref_paths:
-                ref_arr = _to_numpy_01(
+                ref_arr = _to_numpy_hu(
                     _load_tensor(ref_path),
                     data_min=config.data_min,
                     data_max=config.data_max,
@@ -819,16 +836,16 @@ def calculate_similarity_metrics(
                     "generated_path": str(gen_path),
                     "reference_path": str(ref_path),
                     "mae": mae_3d(gen_arr, ref_arr),
-                    "ssim": ssim_3d(gen_arr, ref_arr),
+                    "ssim": ssim_3d(gen_arr, ref_arr, config.data_min, config.data_max),
                     "sob": sob_3d(gen_arr, ref_arr),
                 }
 
                 if config.use_lpips and lpips_model is not None:
                     row["lpips"] = lpips_3d(
+                        config=config,
+                        lpips_model=lpips_model,
                         pred=gen_arr,
                         ref=ref_arr,
-                        lpips_model=lpips_model,
-                        config=config,
                     )
                 else:
                     row["lpips"] = np.nan
@@ -922,12 +939,12 @@ def calculate_pairwise_variety_metrics(
             continue
 
         for path_a, path_b in itertools.combinations(paths, 2):
-            arr_a = _to_numpy_01(
+            arr_a = _to_numpy_hu(
                 _load_tensor(path_a),
                 data_min=config.data_min,
                 data_max=config.data_max,
             )
-            arr_b = _to_numpy_01(
+            arr_b = _to_numpy_hu(
                 _load_tensor(path_b),
                 data_min=config.data_min,
                 data_max=config.data_max,
@@ -947,7 +964,7 @@ def calculate_pairwise_variety_metrics(
                 "path_a": str(path_a),
                 "path_b": str(path_b),
                 "mae": mae_3d(arr_a, arr_b),
-                "ssim": ssim_3d(arr_a, arr_b),
+                "ssim": ssim_3d(arr_a, arr_b, config.data_min, config.data_max),
                 "sob": sob_3d(arr_a, arr_b),
             }
 

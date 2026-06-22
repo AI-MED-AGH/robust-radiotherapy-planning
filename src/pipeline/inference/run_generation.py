@@ -213,10 +213,14 @@ def decode_latent_to_ct(
         factor=config.encoder_decoder_factor,
     )
 
-    reconstructed_ct = torch.clamp(
-        (config.data_max - config.data_min) * reconstructed_ct + config.data_min,
-        min=config.data_min,
-        max=config.data_max,
+    reconstructed_ct = (
+        torch.clamp(
+            (config.data_max - config.data_min) * reconstructed_ct + config.data_min,
+            min=config.data_min,
+            max=config.data_max,
+        )
+        .round()
+        .int()
     )
 
     return reconstructed_ct
@@ -312,7 +316,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
             patient_dir.mkdir(parents=True, exist_ok=True)
 
             for variant_idx in range(1, config.cts_per_patient + 1):
-                z_t = torch.randn_like(condition_latent).to(device) * config.latent_scale
+                z_t = torch.randn_like(condition_latent).to(device)
 
                 for timestep in scheduler.timesteps:
                     timestep_tensor = torch.tensor([timestep], device=device)
