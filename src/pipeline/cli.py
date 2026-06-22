@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
         - device
         - cts_per_patient
         - steps
+        - evaluation_split
+        - validation_fold
         - no_validate_paths
         - no_lpips
         - generated_ct_dir
@@ -58,6 +60,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="Number of rectified flow sampling steps",
+    )
+
+    parser.add_argument(
+        "--evaluation-split",
+        choices=["test", "val"],
+        default="test",
+        help="Dataset split to run the pipeline on",
+    )
+
+    parser.add_argument(
+        "--validation-fold",
+        type=int,
+        default=0,
+        help="Cross-validation fold to use when --evaluation-split=val",
     )
 
     parser.add_argument(
@@ -124,6 +140,8 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "validate_paths": not args.no_validate_paths,
         "cts_per_patient": args.cts_per_patient,
         "steps": args.steps,
+        "evaluation_split": args.evaluation_split,
+        "validation_fold": args.validation_fold,
         "use_lpips": not args.no_lpips,
     }
 

@@ -192,12 +192,12 @@ def prepare_test_data(
     folds: int = 5,
 ) -> None:
     """
-    Prepare MAISI testing data from the test split.
+    Prepare MAISI evaluation data from the configured split.
 
     This function:
     - creates or loads the longitudinal CT train/validation/test split
-    - selects the test split
-    - extracts planning CTs from the test set
+    - selects the configured test or validation split
+    - extracts planning CTs from the selected split
     - preprocesses planning CTs
     - saves processed CT tensors to config.processed_ct_dir
 
@@ -232,10 +232,10 @@ def prepare_test_data(
     Raises
     ------
     KeyError
-        If the generated data dictionary does not contain the "test" key.
+        If the generated data dictionary does not contain the requested split.
 
     ValueError
-        If the test split is empty or invalid.
+        If the requested split is empty or invalid.
 
     FileNotFoundError
         If required CT files do not exist.
@@ -250,14 +250,30 @@ def prepare_test_data(
         save=False,
     )
 
-    if "test" not in data_dict:
-        raise KeyError("The data dictionary does not contain a 'test' split")
+    if config.evaluation_split == "test":
+        if "test" not in data_dict:
+            raise KeyError("The data dictionary does not contain a 'test' split")
 
-    if len(data_dict["test"]) == 0:
-        raise ValueError("The test split is empty. Cannot prepare MAISI test data")
+        data_path_list = data_dict["test"]
+
+    else:
+        if config.validation_fold not in data_dict:
+            raise KeyError(f"The data dictionary does not contain validation fold {config.validation_fold}")
+
+        fold_dict = data_dict[config.validation_fold]
+
+        if "val" not in fold_dict:
+            raise KeyError(f"Validation fold {config.validation_fold} does not contain a 'val' split")
+
+        data_path_list = fold_dict["val"]
+
+    if len(data_path_list) == 0:
+        raise ValueError(
+            f"The {config.evaluation_split} split is empty. Cannot prepare MAISI {config.evaluation_split} data"
+        )
 
     process_and_save_planning_cts(
         config=config,
         output_dir=config.processed_ct_dir,
-        data_path_list=data_dict["test"],
+        data_path_list=data_path_list,
     )

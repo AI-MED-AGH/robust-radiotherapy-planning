@@ -168,11 +168,13 @@ class MaisiTestingConfig:
 
     # Output paths
     output_root: Path = Path("RESULTS/MAISI_TESTING")
+    evaluation_split: Literal["test", "val"] = "test"
+    validation_fold: int = 0
 
     processed_ct_dir: Path = output_root / "processed_ct" / "test"
     latent_ct_dir: Path = output_root / "latents" / "test"
     generated_ct_dir: Path = output_root / "generated_ct" / "test"
-    metrics_dir: Path = output_root / "metrics"
+    metrics_dir: Path = output_root / "metrics" / "test"
     logs_dir: Path = output_root / "logs"
 
     # Model weights
@@ -184,7 +186,7 @@ class MaisiTestingConfig:
     # Inference config
     cts_per_patient: int = 1
     steps: int = 30
-    latent_scale: float = 1.0
+    latent_scale: float = 1.949401
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
 
     # MAISI-specific config
@@ -250,11 +252,37 @@ class MaisiTestingConfig:
         self._set_default_vae_config()
         self._set_default_rflow_config()
         self._set_default_scheduler_config()
+        self._set_split_output_dirs()
 
         self._create_output_dirs()
         if self.validate_paths:
             self._validate_paths()
         self._validate_inference_settings()
+
+    def _set_split_output_dirs(self) -> None:
+        """
+        Point default output directories at the configured evaluation split.
+        """
+
+        if self.evaluation_split == "test":
+            return
+
+        default_processed_ct_dir = self.output_root / "processed_ct" / "test"
+        default_latent_ct_dir = self.output_root / "latents" / "test"
+        default_generated_ct_dir = self.output_root / "generated_ct" / "test"
+        default_metrics_dir = self.output_root / "metrics" / "test"
+
+        if self.processed_ct_dir == default_processed_ct_dir:
+            self.processed_ct_dir = self.output_root / "processed_ct" / self.evaluation_split
+
+        if self.latent_ct_dir == default_latent_ct_dir:
+            self.latent_ct_dir = self.output_root / "latents" / self.evaluation_split
+
+        if self.generated_ct_dir == default_generated_ct_dir:
+            self.generated_ct_dir = self.output_root / "generated_ct" / self.evaluation_split
+
+        if self.metrics_dir == default_metrics_dir:
+            self.metrics_dir = self.output_root / "metrics" / self.evaluation_split
 
     def _create_output_dirs(self) -> None:
         """
@@ -312,6 +340,12 @@ class MaisiTestingConfig:
 
         if self.steps < 1:
             raise ValueError("`steps` must be at least 1")
+
+        if self.evaluation_split not in {"test", "val"}:
+            raise ValueError(f"`evaluation_split` must be either 'test' or 'val'. Got {self.evaluation_split}")
+
+        if self.validation_fold < 0:
+            raise ValueError("`validation_fold` must be non-negative")
 
         if self.latent_scale <= 0:
             raise ValueError("`latent_scale` must be greater than 0")
@@ -448,5 +482,5 @@ class MaisiTestingConfig:
                 "use_discrete_timesteps": False,
                 "use_timestep_transform": True,
                 "sample_method": "uniform",
-                "base_img_size_numel": 64 * 64 * 16,
+                "base_img_size_numel": 128 * 128 * 32,
             }
