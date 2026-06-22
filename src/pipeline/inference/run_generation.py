@@ -285,7 +285,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         pin_memory=device.type == "cuda",
     )
 
-    class_labels = torch.tensor([0], dtype=torch.long, device=device)
+    class_labels = torch.tensor([2], dtype=torch.long, device=device)
     spacing_tensor = torch.tensor(
         [[*config.spacing]],
         dtype=torch.float32,
@@ -300,7 +300,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
             loader,
             desc="Generating CT variants",
         ):
-            condition_latent = condition_latent.to(device, non_blocking=True)
+            condition_latent = condition_latent.to(device, non_blocking=True) * config.latent_scale
 
             filename = os.path.basename(condition_path[0])
 
@@ -336,7 +336,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
                     )
 
                 reconstructed_ct = decode_latent_to_ct(
-                    z_t=z_t,
+                    z_t=z_t / config.latent_scale,
                     vae_model=vae_model,
                     config=config,
                 )
