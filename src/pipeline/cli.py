@@ -17,8 +17,8 @@ def parse_args() -> argparse.Namespace:
     pipeline.
 
     Available stages:
-    - prepare: preprocess test planning CTs
-    - encode: encode processed CTs into latent space
+    - prepare: preprocess test CTs
+    - encode: encode processed planning CTs into latent space
     - generate: generate CT variants from latent conditions
     - evaluate: calculate evaluation metrics
     - all: run all stages in order
@@ -167,8 +167,8 @@ def run_stage(
     Run one selected MAISI testing pipeline stage.
 
     Supported stages:
-    - prepare: preprocess test planning CTs
-    - encode: encode processed CTs into latent space
+    - prepare: preprocess test CTs
+    - encode: encode processed planning CTs into latent space
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
     - all: run prepare, encode, generate, and evaluate in sequence

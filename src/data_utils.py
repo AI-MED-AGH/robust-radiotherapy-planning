@@ -15,12 +15,12 @@ class LoadProcessedTensord(MapTransform):
     """
     Load processed CT tensors saved as `.pt` files.
 
-    This transform is used after the preprocessing step, where planning CTs
+    This transform is used after the preprocessing step, where CTs
     are already loaded, scaled, cropped/padded, and saved as torch tensors.
 
     Assumptions:
     - Input files are `.pt` tensors.
-    - Each file contains one processed planning CT.
+    - Each file contains one processed CT.
     - The tensor was created by `prepare_test_data.py`.
     - The dictionary contains keys listed in `self.keys`.
 
