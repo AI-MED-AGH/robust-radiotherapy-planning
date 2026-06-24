@@ -304,25 +304,25 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
     """
 
     if pred.size == 0:
-        raise ValueError("`pred` cannot be empty.")
+        raise ValueError("`pred` cannot be empty")
 
     if ref.size == 0:
-        raise ValueError("`ref` cannot be empty.")
+        raise ValueError("`ref` cannot be empty")
 
     if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
 
     if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values.")
+        raise ValueError("`pred` contains NaN or infinite values")
 
     if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values.")
+        raise ValueError("`ref` contains NaN or infinite values")
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
@@ -385,13 +385,13 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
     """
 
     if arr.size == 0:
-        raise ValueError("`arr` cannot be empty.")
+        raise ValueError("`arr` cannot be empty")
 
     if arr.ndim != 3:
         raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values.")
+        raise ValueError("`arr` contains NaN or infinite values")
 
     sx = sobel(arr, axis=0)
     sy = sobel(arr, axis=1)
@@ -436,25 +436,25 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
 
     if pred.size == 0:
-        raise ValueError("`pred` cannot be empty.")
+        raise ValueError("`pred` cannot be empty")
 
     if ref.size == 0:
-        raise ValueError("`ref` cannot be empty.")
+        raise ValueError("`ref` cannot be empty")
 
     if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
 
     if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values.")
+        raise ValueError("`pred` contains NaN or infinite values")
 
     if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values.")
+        raise ValueError("`ref` contains NaN or infinite values")
 
     pred_edge = sobel_edge_map_3d(pred)
     ref_edge = sobel_edge_map_3d(ref)
@@ -501,19 +501,19 @@ def _evenly_spaced_slices_for_lpips(
     """
 
     if arr.size == 0:
-        raise ValueError("`arr` cannot be empty.")
+        raise ValueError("`arr` cannot be empty")
 
     if arr.ndim != 3:
         raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values.")
+        raise ValueError("`arr` contains NaN or infinite values")
 
     if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation.")
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
 
     if max_slices < 1:
-        raise ValueError("`max_slices` must be at least 1.")
+        raise ValueError("`max_slices` must be at least 1")
 
     z_dim = arr.shape[-1]
 
@@ -1006,7 +1006,7 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        print(f"Skipping {comparison_type}: no valid pairwise comparisons were calculated.")
+        print(f"Skipping {comparison_type}: no valid pairwise comparisons were calculated")
         return
 
     df = pd.DataFrame(rows)
