@@ -191,6 +191,25 @@ def _extract_patient_id(path: str | Path) -> str:
     return patient_id
 
 
+def _is_planning_ct_path(path: str | Path) -> bool:
+    """
+    Check whether a CT tensor path points to the planning CT.
+    """
+
+    return "fraction_1_" in Path(path).name
+
+
+def _exclude_planning_cts(ct_groups: dict[str, list[Path]]) -> dict[str, list[Path]]:
+    """
+    Remove planning CT paths from grouped CT tensors.
+    """
+
+    return {
+        patient_id: [path for path in paths if not _is_planning_ct_path(path)]
+        for patient_id, paths in ct_groups.items()
+    }
+
+
 def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
     Calculate mean absolute error between two 3D images.
@@ -758,9 +777,9 @@ def calculate_similarity_metrics(
     """
     Calculate generated-vs-real CT similarity metrics.
 
-    This function compares generated CT variants with available original or
-    reference CT tensors for the same patient. It is robust to missing generated
-    variants and calculates only comparisons that are possible.
+    This function compares generated CT variants with available non-planning
+    original/reference CT tensors for the same patient. It is robust to missing
+    generated variants and calculates only comparisons that are possible.
 
     Metrics:
     - MAE: lower is better
@@ -802,10 +821,15 @@ def calculate_similarity_metrics(
         generated.items(),
         desc="Generated vs real metrics",
     ):
-        ref_paths = originals.get(patient_id, [])
+        all_ref_paths = originals.get(patient_id, [])
+        ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
+
+        if len(all_ref_paths) == 0:
+            print(f"Skipping {patient_id}: no original/reference CT found")
+            continue
 
         if len(ref_paths) == 0:
-            print(f"Skipping {patient_id}: no original/reference CT found")
+            print(f"Skipping {patient_id}: no non-planning original/reference CT found")
             continue
 
         for gen_path in gen_paths:
@@ -1038,6 +1062,7 @@ def evaluate_generated_cts(
 
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
+    originals_without_planning = _exclude_planning_cts(originals)
 
     calculate_similarity_metrics(
         config=config,
@@ -1051,7 +1076,7 @@ def evaluate_generated_cts(
     )
 
     calculate_pairwise_variety_metrics(
-        ct_groups=originals,
+        ct_groups=originals_without_planning,
         config=config,
         output_filename="real_pairwise_variety_metrics.csv",
         comparison_type="real_vs_real",
