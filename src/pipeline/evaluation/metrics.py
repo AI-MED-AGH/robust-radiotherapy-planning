@@ -913,7 +913,8 @@ def calculate_pairwise_variety_metrics(
         If `ct_groups` is empty.
         If `output_filename` does not end with ".csv".
         If `max_lpips_slices` is less than 1.
-        If no valid pairwise comparisons can be calculated.
+        If the inputs are invalid. If no valid pairwise comparisons can be
+        calculated, the metric file is skipped.
     """
 
     if len(ct_groups) == 0:
@@ -981,7 +982,8 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        raise ValueError(f"No valid pairwise comparisons were calculated for `{comparison_type}`.")
+        print(f"Skipping {comparison_type}: no valid pairwise comparisons were calculated.")
+        return
 
     df = pd.DataFrame(rows)
 
@@ -1002,7 +1004,7 @@ def evaluate_generated_cts(
     """
     Run full CT generation evaluation.
 
-    This function produces three metric files:
+    This function produces up to three metric files:
 
     1. generated_vs_real_metrics.csv
        Generated CTs compared to original/reference CTs.
@@ -1031,7 +1033,7 @@ def evaluate_generated_cts(
         If generated or original CT directories do not exist.
 
     ValueError
-        If no valid comparisons can be calculated.
+        If no valid generated-vs-real comparisons can be calculated.
     """
 
     generated = collect_generated_cts(config.generated_ct_dir)
