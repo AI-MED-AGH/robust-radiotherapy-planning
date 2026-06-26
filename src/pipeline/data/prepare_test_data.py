@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _extract_all_ct_paths, _is_planning_ct_path
+from src.pipeline.helpers.helpers import _extract_all_ct_paths
 
 
 def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
@@ -134,31 +134,6 @@ def process_and_save_cts(
 
         clean_tensor = tensor_data.as_tensor().clone().detach()
         torch.save(clean_tensor, save_path)
-
-
-def process_and_save_planning_cts(
-    config: MaisiTestingConfig,
-    data_path_list: list[str] | list[dict[str, Any]],
-    output_dir: Path | None = None,
-) -> None:
-    """
-    Preprocess planning CTs and save them as `.pt` tensors.
-
-    This compatibility wrapper preserves the previous public helper behavior.
-    The full pipeline uses :func:`process_and_save_cts` so evaluation has all
-    real CT fractions available.
-    """
-
-    planning_ct_paths = [path for path in _extract_all_ct_paths(data_path_list) if _is_planning_ct_path(path)]
-
-    if len(planning_ct_paths) == 0:
-        raise ValueError("No planning CTs were found. Expected filenames containing 'fraction_1_'.")
-
-    process_and_save_cts(
-        config=config,
-        data_path_list=planning_ct_paths,
-        output_dir=output_dir,
-    )
 
 
 def prepare_test_data(
