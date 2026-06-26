@@ -77,8 +77,8 @@ def build_processed_ct_loader(
     """
     Build a dataloader for processed planning CT tensors.
 
-    This function scans `config.processed_ct_dir` for `.pt` files and creates
-    a MONAI dataloader that loads them for VAE encoding.
+    This function scans `config.processed_ct_dir` for planning CT `.pt` files
+    and creates a MONAI dataloader that loads them for VAE encoding.
 
     Each sample has the format:
         {
@@ -89,6 +89,7 @@ def build_processed_ct_loader(
     Assumptions:
     - Processed CTs are stored in:
         config.processed_ct_dir
+    - Planning CTs are identified by "fraction_1_" in the filename.
     - Latent CTs should be saved to:
         config.latent_ct_dir
     - Processed CTs are saved as `.pt` files.
@@ -106,7 +107,7 @@ def build_processed_ct_loader(
     Returns
     -------
     loader : ThreadDataLoader
-        MONAI dataloader over processed CT tensors.
+        MONAI dataloader over processed planning CT tensors.
 
     Raises
     ------
@@ -114,7 +115,7 @@ def build_processed_ct_loader(
         If `config.processed_ct_dir` does not exist.
 
     ValueError
-        If no `.pt` files are found or batch size is invalid.
+        If no planning CT `.pt` files are found or batch size is invalid.
     """
 
     if batch_size < 1:
@@ -137,6 +138,9 @@ def build_processed_ct_loader(
     for file_path in sorted(glob.glob(str(config.processed_ct_dir / "*.pt"))):
         filename = os.path.basename(file_path)
 
+        if "fraction_1_" not in filename:
+            continue
+
         test_files.append(
             {
                 "image": file_path,
@@ -146,7 +150,8 @@ def build_processed_ct_loader(
 
     if len(test_files) == 0:
         raise ValueError(
-            f"No processed CT `.pt` files found in: {config.processed_ct_dir}. Run `prepare_test_data(config)` first"
+            f"No processed planning CT `.pt` files found in: {config.processed_ct_dir}. "
+            "Run `prepare_test_data(config)` first"
         )
 
     dataset = Dataset(data=test_files, transform=transform)
@@ -186,10 +191,10 @@ def encode_latents(config: MaisiTestingConfig) -> None:
     Raises
     ------
     FileNotFoundError
-        If processed CTs or VAE weights are missing.
+        If processed planning CTs or VAE weights are missing.
 
     ValueError
-        If no processed CTs are found or config values are invalid.
+        If no processed planning CTs are found or config values are invalid.
 
     RuntimeError
         If the VAE checkpoint is incompatible with the VAE config.

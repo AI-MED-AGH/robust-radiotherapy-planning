@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.helpers import _extract_all_ct_paths
 
 
 def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
@@ -65,78 +66,28 @@ def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
     )
 
 
-def _extract_planning_ct_paths(data_path_list: list[str | dict[str, Any]]) -> list[str]:
-    """
-    Extract planning CT paths from a test data list.
-
-    Assumptions:
-    - Planning CT is fraction 1.
-    - The data list may contain either raw path strings or dictionaries.
-    - If dictionaries are used, the planning CT path is expected under
-      the key "moving_image".
-
-    Parameters
-    ----------
-    data_path_list : list[str | dict[str, Any]]
-        List of CT paths or dictionaries describing CT pairs.
-
-    Returns
-    -------
-    planning_ct_paths : list[str]
-        List of paths pointing to planning CT images.
-
-    Raises
-    ------
-    ValueError
-        If an item in the data list has an unsupported format.
-    """
-
-    planning_ct_paths = []
-
-    for item in data_path_list:
-        if isinstance(item, str):
-            path = item
-
-        elif isinstance(item, dict):
-            if "moving_image" not in item:
-                raise ValueError(
-                    f"Expected dictionary item to contain key 'moving_image'. Got keys: {list(item.keys())}"
-                )
-
-            path = item["moving_image"]
-
-        else:
-            raise ValueError(f"Each test item must be either a string path or a dictionary. Got: {type(item)}")
-
-        if "fraction_1_" in path:
-            planning_ct_paths.append(path)
-
-    return planning_ct_paths
-
-
-def process_and_save_planning_cts(
+def process_and_save_cts(
     config: MaisiTestingConfig,
-    data_path_list: list[str | dict[str, Any]],
+    data_path_list: list[str] | list[dict[str, Any]],
     output_dir: Path | None = None,
 ) -> None:
     """
-    Preprocess planning CTs and save them as `.pt` tensors.
+    Preprocess all CTs and save them as `.pt` tensors.
 
     Assumptions:
-    - Planning CTs are identified by "fraction_1_" in the filename.
-    - Only planning CTs are currently used as the condition image.
     - Output tensors are saved as `.pt` files.
-    - Saved tensors are later used by the MAISI VAE encoder.
+    - Saved planning CT tensors are later used by the MAISI VAE encoder.
+    - Saved non-planning CT tensors are used as real CTs during evaluation.
 
     Parameters
     ----------
     config : MaisiTestingConfig
         Configuration object containing pipeline paths and settings.
 
-    data_path_list : list[str | dict[str, Any]]
+    data_path_list : list[str] | list[dict[str, Any]]
         List of CT paths or dictionary items from the test split.
         Supported formats:
-            "path/to/Patient_1_fraction_1_.nii.gz"
+            "path/to/Patient_1_fraction_2_.nii.gz"
 
         or:
             {
@@ -152,10 +103,10 @@ def process_and_save_planning_cts(
     Raises
     ------
     FileNotFoundError
-        If one of the planning CT files does not exist.
+        If one of the CT files does not exist.
 
     ValueError
-        If no planning CTs are found in the provided data list.
+        If no CTs are found in the provided data list.
     """
 
     if output_dir is None:
@@ -164,16 +115,16 @@ def process_and_save_planning_cts(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     transform = get_ct_preprocessing_transform(config)
-    planning_ct_paths = _extract_planning_ct_paths(data_path_list)
+    ct_paths = _extract_all_ct_paths(data_path_list)
 
-    if len(planning_ct_paths) == 0:
-        raise ValueError("No planning CTs were found. Expected filenames containing 'fraction_1_'.")
+    if len(ct_paths) == 0:
+        raise ValueError("No CTs were found in the provided data list")
 
-    for path_raw in tqdm(planning_ct_paths, desc="Preparing planning CTs"):
+    for path_raw in tqdm(ct_paths, desc="Preparing CTs"):
         path = Path(path_raw)
 
         if not path.exists():
-            raise FileNotFoundError(f"Planning CT file does not exist: {path}")
+            raise FileNotFoundError(f"CT file does not exist: {path}")
 
         transformed = transform({"image": str(path)})
         tensor_data = transformed["image"]
@@ -197,8 +148,8 @@ def prepare_test_data(
     This function:
     - creates or loads the longitudinal CT train/validation/test split
     - selects the configured test or validation split
-    - extracts planning CTs from the selected split
-    - preprocesses planning CTs
+    - extracts all CTs from the selected split
+    - preprocesses all CTs
     - saves processed CT tensors to config.processed_ct_dir
 
     Assumptions:
@@ -210,6 +161,8 @@ def prepare_test_data(
         ...
     - Fraction 1 is the planning CT.
     - Planning CT is used as the condition image for MAISI generation.
+    - All CT fractions are saved so evaluation can compare generated CTs
+      against real non-planning CTs.
     - The output directory is:
         config.processed_ct_dir
 
@@ -272,7 +225,7 @@ def prepare_test_data(
             f"The {config.evaluation_split} split is empty. Cannot prepare MAISI {config.evaluation_split} data"
         )
 
-    process_and_save_planning_cts(
+    process_and_save_cts(
         config=config,
         output_dir=config.processed_ct_dir,
         data_path_list=data_path_list,

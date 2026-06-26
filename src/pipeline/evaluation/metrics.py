@@ -1,10 +1,9 @@
 import glob
 import itertools
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import torch
 from scipy.ndimage import sobel
@@ -12,183 +11,17 @@ from skimage.metrics import structural_similarity as ssim
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-
-
-def _load_tensor(path: str | Path) -> torch.Tensor:
-    """
-    Load a tensor from a `.pt` file and normalize its shape.
-
-    This helper loads tensors saved by different stages of the MAISI testing
-    pipeline. It supports files that contain either a raw tensor or a
-    dictionary with an `"image"` key.
-
-    Shape handling:
-    - If the tensor has 5 dimensions, the first dimension is treated as a
-      batch dimension and removed.
-    - If the tensor has 4 dimensions, the first dimension is treated as a
-      channel dimension and removed.
-    - The returned tensor is always converted to float and moved to CPU.
-
-    Parameters
-    ----------
-    path : str | Path
-        Path to the `.pt` tensor file.
-
-    Returns
-    -------
-    tensor : torch.Tensor
-        Loaded tensor as a CPU float tensor, usually with shape:
-        `(D, H, W)` or equivalent spatial dimensions.
-
-    Raises
-    ------
-    ValueError
-        If the loaded object is a dictionary but does not contain an `"image"`
-        key.
-    """
-    tensor = torch.load(path, weights_only=True)
-
-    if isinstance(tensor, dict):
-        if "image" in tensor:
-            tensor = tensor["image"]
-        else:
-            raise ValueError(f"Unsupported tensor dictionary keys: {tensor.keys()}")
-
-    tensor = tensor.float()
-
-    # Remove batch dimension if present.
-    if tensor.ndim == 5:
-        tensor = tensor[0]
-
-    # Remove channel dimension if present.
-    if tensor.ndim == 4:
-        tensor = tensor[0]
-
-    return cast(torch.Tensor, tensor.cpu())
-
-
-FloatArray = npt.NDArray[np.floating[Any]]
+from src.pipeline.helpers.helpers import (
+    FloatArray,
+    _exclude_planning_cts,
+    _extract_patient_id,
+    _load_tensor,
+    _to_numpy_hu,
+)
 
 
 class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
-
-
-def _to_numpy_hu(
-    tensor: torch.Tensor,
-    data_min: float,
-    data_max: float,
-) -> FloatArray:
-    """
-    Convert a CT tensor to a NumPy array of HU values rounded to the nearest integer.
-
-    This helper supports two expected intensity formats:
-    - tensors normalized to the range [0, 1]
-    - HU-like tensors in the range approximately [data_min, data_max]
-
-    If the tensor is already outside hu, it is returned rounded as a
-    float32 NumPy array. Otherwise, values are linearly rescaled from [0, 1] to [data_min, data_max].
-
-    Parameters
-    ----------
-    tensor : torch.Tensor
-        Input CT tensor.
-
-    data_min: float
-        Minimum value allowed for the data.
-
-    data_max: float
-        Maximum value allowed for the data.
-
-    Returns
-    -------
-    arr : np.ndarray
-        CT image as a float32 NumPy array normalized to [data_min, data_max].
-
-    Raises
-    ------
-    ValueError
-        If `tensor` is empty.
-        If `tensor` contains NaN or infinite values.
-        If `data_min` is more than `data_max`.
-    """
-
-    if tensor.numel() == 0:
-        raise ValueError("`tensor` cannot be empty")
-
-    if not torch.isfinite(tensor).all():
-        raise ValueError("`tensor` contains NaN or infinite values")
-
-    if data_min >= data_max:
-        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
-
-    arr = tensor.detach().cpu().numpy().astype(np.float32)
-
-    # Case 1: HU-like range [data_min, data_max]
-    if arr.min() < 0.0 or arr.max() > 1.0:
-        return arr.round()
-
-    # Case 2: normalized to [0, 1]
-    arr = ((data_max - data_min) * arr + data_min).astype(np.float32).round()
-
-    return arr
-
-
-def _extract_patient_id(path: str | Path) -> str:
-    """
-    Extract patient ID from a CT tensor filename or generated output path.
-
-    Supported filename patterns:
-    - Planning CT / original CT:
-        Patient_1_fraction_1_.pt -> Patient_1
-    - Generated CT:
-        Patient_1_gen_1.pt -> Patient_1
-
-    If neither pattern is found, the parent folder name is returned as a
-    fallback. This supports folder-based generated outputs such as:
-        generated_ct/test/Patient_1/Patient_1_gen_1.pt
-
-    Parameters
-    ----------
-    path : str | Path
-        Path to a CT tensor file.
-
-    Returns
-    -------
-    patient_id : str
-        Extracted patient ID.
-
-    Raises
-    ------
-    ValueError
-        If `path` is empty.
-        If patient ID cannot be extracted from the filename or parent folder.
-    """
-
-    path = Path(path)
-
-    if str(path).strip() == "":
-        raise ValueError("`path` cannot be empty")
-
-    name = path.name
-
-    if "_fraction_" in name:
-        patient_id = name.split("_fraction_")[0]
-
-    elif "_gen_" in name:
-        patient_id = name.split("_gen_")[0]
-
-    else:
-        # fallback for folder-based generated outputs
-        patient_id = path.parent.name
-
-    if patient_id == "":
-        raise ValueError(f"Could not extract patient ID from path: {path}")
-
-    if patient_id in {".", ".."}:
-        raise ValueError(f"Invalid patient ID extracted from path: {path}")
-
-    return patient_id
 
 
 def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
@@ -285,25 +118,25 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
     """
 
     if pred.size == 0:
-        raise ValueError("`pred` cannot be empty.")
+        raise ValueError("`pred` cannot be empty")
 
     if ref.size == 0:
-        raise ValueError("`ref` cannot be empty.")
+        raise ValueError("`ref` cannot be empty")
 
     if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
 
     if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values.")
+        raise ValueError("`pred` contains NaN or infinite values")
 
     if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values.")
+        raise ValueError("`ref` contains NaN or infinite values")
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
@@ -366,13 +199,13 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
     """
 
     if arr.size == 0:
-        raise ValueError("`arr` cannot be empty.")
+        raise ValueError("`arr` cannot be empty")
 
     if arr.ndim != 3:
         raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values.")
+        raise ValueError("`arr` contains NaN or infinite values")
 
     sx = sobel(arr, axis=0)
     sy = sobel(arr, axis=1)
@@ -417,25 +250,25 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
     """
 
     if pred.size == 0:
-        raise ValueError("`pred` cannot be empty.")
+        raise ValueError("`pred` cannot be empty")
 
     if ref.size == 0:
-        raise ValueError("`ref` cannot be empty.")
+        raise ValueError("`ref` cannot be empty")
 
     if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}.")
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
 
     if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}.")
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
 
     if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}.")
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
 
     if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values.")
+        raise ValueError("`pred` contains NaN or infinite values")
 
     if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values.")
+        raise ValueError("`ref` contains NaN or infinite values")
 
     pred_edge = sobel_edge_map_3d(pred)
     ref_edge = sobel_edge_map_3d(ref)
@@ -482,19 +315,19 @@ def _evenly_spaced_slices_for_lpips(
     """
 
     if arr.size == 0:
-        raise ValueError("`arr` cannot be empty.")
+        raise ValueError("`arr` cannot be empty")
 
     if arr.ndim != 3:
         raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
 
     if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values.")
+        raise ValueError("`arr` contains NaN or infinite values")
 
     if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation.")
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
 
     if max_slices < 1:
-        raise ValueError("`max_slices` must be at least 1.")
+        raise ValueError("`max_slices` must be at least 1")
 
     z_dim = arr.shape[-1]
 
@@ -758,9 +591,9 @@ def calculate_similarity_metrics(
     """
     Calculate generated-vs-real CT similarity metrics.
 
-    This function compares generated CT variants with available original or
-    reference CT tensors for the same patient. It is robust to missing generated
-    variants and calculates only comparisons that are possible.
+    This function compares generated CT variants with available non-planning
+    original/reference CT tensors for the same patient. It is robust to missing
+    generated variants and calculates only comparisons that are possible.
 
     Metrics:
     - MAE: lower is better
@@ -802,10 +635,15 @@ def calculate_similarity_metrics(
         generated.items(),
         desc="Generated vs real metrics",
     ):
-        ref_paths = originals.get(patient_id, [])
+        all_ref_paths = originals.get(patient_id, [])
+        ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
+
+        if len(all_ref_paths) == 0:
+            print(f"Skipping {patient_id}: no original/reference CT found")
+            continue
 
         if len(ref_paths) == 0:
-            print(f"Skipping {patient_id}: no original/reference CT found")
+            print(f"Skipping {patient_id}: no non-planning original/reference CT found")
             continue
 
         for gen_path in gen_paths:
@@ -913,7 +751,8 @@ def calculate_pairwise_variety_metrics(
         If `ct_groups` is empty.
         If `output_filename` does not end with ".csv".
         If `max_lpips_slices` is less than 1.
-        If no valid pairwise comparisons can be calculated.
+        If the inputs are invalid. If no valid pairwise comparisons can be
+        calculated, the metric file is skipped.
     """
 
     if len(ct_groups) == 0:
@@ -981,7 +820,8 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        raise ValueError(f"No valid pairwise comparisons were calculated for `{comparison_type}`.")
+        print(f"Skipping {comparison_type}: no valid pairwise comparisons were calculated")
+        return
 
     df = pd.DataFrame(rows)
 
@@ -1002,7 +842,7 @@ def evaluate_generated_cts(
     """
     Run full CT generation evaluation.
 
-    This function produces three metric files:
+    This function produces up to three metric files:
 
     1. generated_vs_real_metrics.csv
        Generated CTs compared to original/reference CTs.
@@ -1031,11 +871,12 @@ def evaluate_generated_cts(
         If generated or original CT directories do not exist.
 
     ValueError
-        If no valid comparisons can be calculated.
+        If no valid generated-vs-real comparisons can be calculated.
     """
 
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
+    originals_without_planning = _exclude_planning_cts(originals)
 
     calculate_similarity_metrics(
         config=config,
@@ -1049,7 +890,7 @@ def evaluate_generated_cts(
     )
 
     calculate_pairwise_variety_metrics(
-        ct_groups=originals,
+        ct_groups=originals_without_planning,
         config=config,
         output_filename="real_pairwise_variety_metrics.csv",
         comparison_type="real_vs_real",
