@@ -170,6 +170,89 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
     return float(np.mean(scores))
 
 
+def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
+    """
+    Calculate Peak Signal-to-Noise Ratio (PSNR) between two 3D images.
+
+    PSNR measures reconstruction quality from the mean squared voxel-wise
+    difference between the predicted/generated CT and the reference CT.
+    Higher values indicate closer agreement. Identical volumes return
+    positive infinity, matching the standard PSNR definition.
+
+    Parameters
+    ----------
+    pred : np.ndarray
+        Predicted or generated 3D image array.
+
+    ref : np.ndarray
+        Reference 3D image array.
+
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
+    Returns
+    -------
+    psnr : float
+        Peak Signal-to-Noise Ratio in decibels.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` or `ref` contains NaN or infinite values.
+        If `data_min` is greater than or equal to `data_max`.
+        If data falls outside of [data_min, data_max].
+    """
+
+    if pred.size == 0:
+        raise ValueError("`pred` cannot be empty")
+
+    if ref.size == 0:
+        raise ValueError("`ref` cannot be empty")
+
+    if pred.ndim != 3:
+        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
+
+    if ref.ndim != 3:
+        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
+
+    if pred.shape != ref.shape:
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
+
+    if not np.isfinite(pred).all():
+        raise ValueError("`pred` contains NaN or infinite values")
+
+    if not np.isfinite(ref).all():
+        raise ValueError("`ref` contains NaN or infinite values")
+
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    if pred.min() < data_min or pred.max() > data_max:
+        raise ValueError(
+            f"`pred` values must be in the range [data_min, data_max], got min={pred.min()}, max={pred.max()}"
+        )
+
+    if ref.min() < data_min or ref.max() > data_max:
+        raise ValueError(
+            f"`ref` values must be in the range [data_min, data_max], got min={ref.min()}, max={ref.max()}"
+        )
+
+    mse = float(np.mean((pred - ref) ** 2))
+
+    if mse == 0.0:
+        return float("inf")
+
+    data_range = data_max - data_min
+
+    return float(10.0 * np.log10((data_range**2) / mse))
+
+
 def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
     """
     Calculate a 3D Sobel edge magnitude map.
@@ -598,6 +681,7 @@ def calculate_similarity_metrics(
     Metrics:
     - MAE: lower is better
     - SSIM: higher is better
+    - PSNR: higher is better
     - SOB/Sobel MAE: lower is better
     - LPIPS: higher means greater perceptual difference
 
@@ -675,6 +759,7 @@ def calculate_similarity_metrics(
                     "reference_path": str(ref_path),
                     "mae": mae_3d(gen_arr, ref_arr),
                     "ssim": ssim_3d(gen_arr, ref_arr, config.data_min, config.data_max),
+                    "psnr": psnr_3d(gen_arr, ref_arr, config.data_min, config.data_max),
                     "sob": sob_3d(gen_arr, ref_arr),
                 }
 
@@ -703,7 +788,9 @@ def calculate_similarity_metrics(
         index=False,
     )
 
-    summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
+    summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
+        ["mean", "std", "min", "max", "count"]
+    )
 
     summary.to_csv(
         config.metrics_dir / "generated_vs_real_summary.csv",
@@ -727,6 +814,7 @@ def calculate_pairwise_variety_metrics(
     Metrics:
     - MAE: lower means more similar voxel intensities
     - SSIM: higher means more similar structure
+    - PSNR: higher means lower squared voxel-wise error
     - SOB: lower means more similar edge structure
     - LPIPS: higher usually means more visual/perceptual difference
 
@@ -804,6 +892,7 @@ def calculate_pairwise_variety_metrics(
                 "path_b": str(path_b),
                 "mae": mae_3d(arr_a, arr_b),
                 "ssim": ssim_3d(arr_a, arr_b, config.data_min, config.data_max),
+                "psnr": psnr_3d(arr_a, arr_b, config.data_min, config.data_max),
                 "sob": sob_3d(arr_a, arr_b),
             }
 
@@ -830,7 +919,9 @@ def calculate_pairwise_variety_metrics(
         index=False,
     )
 
-    summary = df.groupby("patient_id")[["mae", "ssim", "sob", "lpips"]].agg(["mean", "std", "min", "max", "count"])
+    summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
+        ["mean", "std", "min", "max", "count"]
+    )
 
     summary_name = output_filename.replace(".csv", "_summary.csv")
     summary.to_csv(config.metrics_dir / summary_name)
