@@ -1,6 +1,5 @@
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import torch
 from monai.transforms import (  # type: ignore[attr-defined]
@@ -17,6 +16,7 @@ from tqdm import tqdm
 
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.helpers import _extract_all_ct_paths, _is_planning_ct_path
 
 
 def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
@@ -66,76 +66,9 @@ def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
     )
 
 
-def _is_planning_ct_path(path: str) -> bool:
-    """
-    Check whether a CT path points to the planning CT.
-    """
-
-    return "fraction_1_" in Path(path).name
-
-
-def _extract_all_ct_paths(data_path_list: Sequence[str | dict[str, Any]]) -> list[str]:
-    """
-    Extract all unique CT paths from a test data list.
-
-    Assumptions:
-    - The data list may contain either raw path strings or dictionaries.
-    - If dictionaries are used, CT paths are read from "moving_image" and
-      "fixed_image" when present.
-
-    Parameters
-    ----------
-    data_path_list : Sequence[str | dict[str, Any]]
-        List of CT paths or dictionaries describing CT pairs.
-
-    Returns
-    -------
-    ct_paths : list[str]
-        List of unique paths pointing to CT images.
-
-    Raises
-    ------
-    ValueError
-        If an item in the data list has an unsupported format.
-    """
-
-    ct_paths: list[str] = []
-    seen_paths: set[str] = set()
-
-    for item in data_path_list:
-        if isinstance(item, str):
-            item_paths = [item]
-
-        elif isinstance(item, dict):
-            item_paths = [cast(str, item[key]) for key in ("moving_image", "fixed_image") if key in item]
-            if len(item_paths) == 0:
-                raise ValueError(
-                    "Expected dictionary item to contain at least one of 'moving_image' or 'fixed_image'. "
-                    f"Got keys: {list(item.keys())}"
-                )
-
-        else:
-            raise ValueError(f"Each test item must be either a string path or a dictionary. Got: {type(item)}")
-
-        for path in item_paths:
-            if path not in seen_paths:
-                ct_paths.append(path)
-                seen_paths.add(path)
-
-    return ct_paths
-
-
-def _extract_planning_ct_paths(data_path_list: Sequence[str | dict[str, Any]]) -> list[str]:
-    """
-    Extract unique planning CT paths from a test data list.
-    """
-
-    return [path for path in _extract_all_ct_paths(data_path_list) if _is_planning_ct_path(path)]
-
-
 def process_and_save_cts(
     config: MaisiTestingConfig,
-    data_path_list: Sequence[str | dict[str, Any]],
+    data_path_list: list[str] | list[dict[str, Any]],
     output_dir: Path | None = None,
 ) -> None:
     """
@@ -151,7 +84,7 @@ def process_and_save_cts(
     config : MaisiTestingConfig
         Configuration object containing pipeline paths and settings.
 
-    data_path_list : Sequence[str | dict[str, Any]]
+    data_path_list : list[str] | list[dict[str, Any]]
         List of CT paths or dictionary items from the test split.
         Supported formats:
             "path/to/Patient_1_fraction_2_.nii.gz"
@@ -185,7 +118,7 @@ def process_and_save_cts(
     ct_paths = _extract_all_ct_paths(data_path_list)
 
     if len(ct_paths) == 0:
-        raise ValueError("No CTs were found in the provided data list.")
+        raise ValueError("No CTs were found in the provided data list")
 
     for path_raw in tqdm(ct_paths, desc="Preparing CTs"):
         path = Path(path_raw)
@@ -205,7 +138,7 @@ def process_and_save_cts(
 
 def process_and_save_planning_cts(
     config: MaisiTestingConfig,
-    data_path_list: Sequence[str | dict[str, Any]],
+    data_path_list: list[str] | list[dict[str, Any]],
     output_dir: Path | None = None,
 ) -> None:
     """
@@ -216,7 +149,7 @@ def process_and_save_planning_cts(
     real CT fractions available.
     """
 
-    planning_ct_paths = _extract_planning_ct_paths(data_path_list)
+    planning_ct_paths = [path for path in _extract_all_ct_paths(data_path_list) if _is_planning_ct_path(path)]
 
     if len(planning_ct_paths) == 0:
         raise ValueError("No planning CTs were found. Expected filenames containing 'fraction_1_'.")
