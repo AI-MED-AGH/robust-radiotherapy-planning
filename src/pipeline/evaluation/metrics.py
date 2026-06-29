@@ -6,17 +6,19 @@ from typing import Protocol, cast
 import numpy as np
 import pandas as pd
 import torch
-from scipy.ndimage import sobel
-from skimage.metrics import structural_similarity as ssim
+import torch.nn.functional as F
+from monai.metrics.regression import SSIMMetric
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
-    FloatArray,
+    MetricInput,
+    _as_metric_tensor,
+    _cache_patient_cts,
+    _evenly_spaced_slices_for_lpips,
     _exclude_planning_cts,
     _extract_patient_id,
-    _load_tensor,
-    _to_numpy_hu,
+    _validate_3d_pair,
 )
 
 
@@ -24,7 +26,7 @@ class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
-def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
+def mae_3d(pred: MetricInput, ref: MetricInput) -> float:
     """
     Calculate mean absolute error between two 3D images.
 
@@ -33,11 +35,11 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted or generated 3D image array.
+    pred : np.ndarray | torch.Tensor
+        Predicted or generated 3D image.
 
-    ref : np.ndarray
-        Reference 3D image array.
+    ref : np.ndarray | torch.Tensor
+        Reference 3D image.
 
     Returns
     -------
@@ -53,31 +55,14 @@ def mae_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
+    pred_t = _as_metric_tensor(pred)
+    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    _validate_3d_pair(pred_t, ref_t)
 
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
-
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
-
-    return float(np.mean(np.abs(pred - ref)))
+    return float(torch.mean(torch.abs(pred_t - ref_t)).item())
 
 
-def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
+def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: float) -> float:
     """
     Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
 
@@ -88,11 +73,11 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted 3D image array.
+    pred : np.ndarray | torch.Tensor
+        Predicted 3D image.
 
-    ref : np.ndarray
-        Reference (ground-truth) 3D image array.
+    ref : np.ndarray | torch.Tensor
+        Reference (ground-truth) 3D image.
 
     Returns
     -------
@@ -117,57 +102,50 @@ def ssim_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
         If data falls outside of [data_min, data_max].
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
-
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
-
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
+    pred_t = _as_metric_tensor(pred)
+    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    _validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
 
-    if pred.min() < data_min or pred.max() > data_max:
+    pred_min = float(pred_t.min().item())
+    pred_max = float(pred_t.max().item())
+    ref_min = float(ref_t.min().item())
+    ref_max = float(ref_t.max().item())
+
+    if pred_min < data_min or pred_max > data_max:
         raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred.min()}, max={pred.max()}"
+            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
         )
 
-    if ref.min() < data_min or ref.max() > data_max:
-        raise ValueError(
-            f"`ref` values must be in the range [data_min, data_max], got min={ref.min()}, max={ref.max()}"
-        )
+    if ref_min < data_min or ref_max > data_max:
+        raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
 
-    scores = []
+    window_size = min(11, *(int(dim) for dim in pred_t.shape))
+    if window_size % 2 == 0:
+        window_size -= 1
 
-    for z in range(pred.shape[-1]):
-        pred_slice = pred[:, :, z]
-        ref_slice = ref[:, :, z]
+    if window_size < 3:
+        raise ValueError(f"SSIM window is invalid for image shape {tuple(pred_t.shape)}")
 
+    metric = SSIMMetric(
+        spatial_dims=3,
+        data_range=data_max - data_min,
+        kernel_type="uniform",
+        win_size=window_size,
+    )
+
+    with torch.no_grad():
         score = cast(
-            float,
-            ssim(  # type: ignore[no-untyped-call]
-                ref_slice,
-                pred_slice,
-                data_range=data_max - data_min,
+            torch.Tensor,
+            metric(
+                pred_t.unsqueeze(0).unsqueeze(0),
+                ref_t.unsqueeze(0).unsqueeze(0),
             ),
         )
-        scores.append(score)
 
-    return float(np.mean(scores))
+    return float(score.mean().item())
 
 
 def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
@@ -253,7 +231,7 @@ def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
     return float(10.0 * np.log10((data_range**2) / mse))
 
 
-def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
+def sobel_edge_map_3d(arr: MetricInput) -> torch.Tensor:
     """
     Calculate a 3D Sobel edge magnitude map.
 
@@ -265,13 +243,13 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
 
     Parameters
     ----------
-    arr : np.ndarray
-        Input 3D image array.
+    arr : np.ndarray | torch.Tensor
+        Input 3D image.
 
     Returns
     -------
-    edge : np.ndarray
-        3D Sobel edge magnitude map as a float32 NumPy array.
+    edge : torch.Tensor
+        3D Sobel edge magnitude map.
 
     Raises
     ------
@@ -281,25 +259,32 @@ def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
         If `arr` contains NaN or infinite values.
     """
 
-    if arr.size == 0:
+    arr_t = _as_metric_tensor(arr)
+
+    if arr_t.numel() == 0:
         raise ValueError("`arr` cannot be empty")
 
-    if arr.ndim != 3:
-        raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
+    if arr_t.ndim != 3:
+        raise ValueError(f"`arr` must be a 3D tensor with shape [H, W, Z]. Got shape {tuple(arr_t.shape)}")
 
-    if not np.isfinite(arr).all():
+    if not torch.isfinite(arr_t).all():
         raise ValueError("`arr` contains NaN or infinite values")
 
-    sx = sobel(arr, axis=0)
-    sy = sobel(arr, axis=1)
-    sz = sobel(arr, axis=2)
+    derivative = torch.tensor([-1.0, 0.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
+    smoothing = torch.tensor([1.0, 2.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
 
-    edge = np.sqrt(sx**2 + sy**2 + sz**2)
+    kernel_x = derivative[:, None, None] * smoothing[None, :, None] * smoothing[None, None, :]
+    kernel_y = smoothing[:, None, None] * derivative[None, :, None] * smoothing[None, None, :]
+    kernel_z = smoothing[:, None, None] * smoothing[None, :, None] * derivative[None, None, :]
+    kernels = torch.stack([kernel_x, kernel_y, kernel_z]).unsqueeze(1)
 
-    return cast(FloatArray, edge.astype(np.float32))
+    volume = arr_t.unsqueeze(0).unsqueeze(0)
+    gradients = F.conv3d(volume, kernels, padding=1)
+
+    return cast(torch.Tensor, torch.linalg.vector_norm(gradients.squeeze(0), dim=0))
 
 
-def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
+def sob_3d(pred: MetricInput, ref: MetricInput) -> float:
     """
     Calculate SOB / Sobel-based edge difference between two 3D images.
 
@@ -312,11 +297,11 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted or generated 3D image array.
+    pred : np.ndarray | torch.Tensor
+        Predicted or generated 3D image.
 
-    ref : np.ndarray
-        Reference 3D image array.
+    ref : np.ndarray | torch.Tensor
+        Reference 3D image.
 
     Returns
     -------
@@ -332,115 +317,21 @@ def sob_3d(pred: np.ndarray, ref: np.ndarray) -> float:
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
+    pred_t = _as_metric_tensor(pred)
+    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    _validate_3d_pair(pred_t, ref_t)
 
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
+    pred_edge = sobel_edge_map_3d(pred_t)
+    ref_edge = sobel_edge_map_3d(ref_t)
 
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
-
-    pred_edge = sobel_edge_map_3d(pred)
-    ref_edge = sobel_edge_map_3d(ref)
-
-    return float(np.mean(np.abs(pred_edge - ref_edge)))
-
-
-def _evenly_spaced_slices_for_lpips(
-    arr: np.ndarray,
-    max_slices: int = 32,
-) -> torch.Tensor:
-    """
-    Extract evenly spaced 2D CT slices for LPIPS input format.
-
-    LPIPS expects 2D RGB-like images, so this function:
-    - selects up to `max_slices` slices evenly across the full 3D volume
-    - converts slices from shape [H, W, Z] to [Z, H, W]
-    - adds a channel dimension
-    - repeats the single CT channel into 3 channels
-    - rescales values from [0, 1] to [-1, 1]
-
-    Parameters
-    ----------
-    arr : np.ndarray
-        Input 3D CT array normalized to [0, 1], expected shape [H, W, Z].
-
-    max_slices : int
-        Maximum number of evenly spaced slices used for LPIPS calculation.
-
-    Returns
-    -------
-    tensor : torch.Tensor
-        Tensor formatted for LPIPS with shape [N, 3, H, W] and range [-1, 1],
-        where N is the number of selected slices.
-
-    Raises
-    ------
-    ValueError
-        If `arr` is empty.
-        If `arr` is not 3-dimensional.
-        If `arr` contains NaN or infinite values.
-        If `arr` is not normalized to [0, 1].
-        If `max_slices` is less than 1.
-    """
-
-    if arr.size == 0:
-        raise ValueError("`arr` cannot be empty")
-
-    if arr.ndim != 3:
-        raise ValueError(f"`arr` must be a 3D array with shape [H, W, Z]. Got shape {arr.shape}")
-
-    if not np.isfinite(arr).all():
-        raise ValueError("`arr` contains NaN or infinite values")
-
-    if arr.min() < 0.0 or arr.max() > 1.0:
-        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
-
-    if max_slices < 1:
-        raise ValueError("`max_slices` must be at least 1")
-
-    z_dim = arr.shape[-1]
-
-    if z_dim <= max_slices:
-        slice_ids = np.arange(z_dim)
-    else:
-        slice_ids = np.linspace(
-            0,
-            z_dim - 1,
-            num=max_slices,
-            dtype=int,
-        )
-
-    slices = arr[:, :, slice_ids]  # H, W, Z
-    slices = np.moveaxis(slices, -1, 0)  # Z, H, W
-
-    tensor = torch.from_numpy(slices).float()
-    tensor = tensor.unsqueeze(1)  # Z, 1, H, W
-    tensor = tensor.repeat(1, 3, 1, 1)  # Z, 3, H, W
-
-    tensor = tensor * 2.0 - 1.0
-
-    return tensor
+    return float(torch.mean(torch.abs(pred_edge - ref_edge)).item())
 
 
 def lpips_3d(
     config: MaisiTestingConfig,
     lpips_model: LPIPSModel,
-    pred: np.ndarray,
-    ref: np.ndarray,
+    pred: MetricInput,
+    ref: MetricInput,
 ) -> float:
     """
     Calculate slice-wise LPIPS between two 3D images and average the result.
@@ -467,10 +358,10 @@ def lpips_3d(
     lpips_model : LPIPSModel
         Initialized LPIPS model.
 
-    pred : np.ndarray
+    pred : np.ndarray | torch.Tensor
         Predicted or generated 3D CT array normalized to [data_min, data_max].
 
-    ref : np.ndarray
+    ref : np.ndarray | torch.Tensor
         Reference 3D CT array normalized to [data_min, data_max].
 
     Returns
@@ -489,42 +380,26 @@ def lpips_3d(
         If `max_slices` is less than 1.
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
+    device = torch.device(config.device)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
 
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
-
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
-
-    if pred.min() < config.data_min or pred.max() > config.data_max:
+    if pred_t.min() < config.data_min or pred_t.max() > config.data_max:
         raise ValueError("`pred` must be normalized to [data_min, data_max]")
 
-    if ref.min() < config.data_min or ref.max() > config.data_max:
+    if ref_t.min() < config.data_min or ref_t.max() > config.data_max:
         raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
     pred_tensor = _evenly_spaced_slices_for_lpips(
-        (pred - config.data_min) / (config.data_max - config.data_min),
+        (pred_t - config.data_min) / (config.data_max - config.data_min),
         max_slices=config.max_lpips_slices,
-    ).to(config.device)
+    )
 
     ref_tensor = _evenly_spaced_slices_for_lpips(
-        (ref - config.data_min) / (config.data_max - config.data_min),
+        (ref_t - config.data_min) / (config.data_max - config.data_min),
         max_slices=config.max_lpips_slices,
-    ).to(config.device)
+    )
 
     with torch.no_grad():
         score = lpips_model(pred_tensor, ref_tensor)
@@ -704,6 +579,7 @@ def calculate_similarity_metrics(
 
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
+    device = torch.device(config.device)
 
     lpips_model = None
 
@@ -730,25 +606,19 @@ def calculate_similarity_metrics(
             print(f"Skipping {patient_id}: no non-planning original/reference CT found")
             continue
 
-        for gen_path in gen_paths:
-            gen_arr = _to_numpy_hu(
-                _load_tensor(gen_path),
-                data_min=config.data_min,
-                data_max=config.data_max,
-            )
+        patient_paths = [*gen_paths, *ref_paths]
+        patient_tensors = _cache_patient_cts(patient_paths, config=config, device=device)
 
+        for gen_path in gen_paths:
+            gen_arr = patient_tensors[gen_path]
             for ref_path in ref_paths:
-                ref_arr = _to_numpy_hu(
-                    _load_tensor(ref_path),
-                    data_min=config.data_min,
-                    data_max=config.data_max,
-                )
+                ref_arr = patient_tensors[ref_path]
 
                 if gen_arr.shape != ref_arr.shape:
                     print(
                         f"Skipping shape mismatch for {patient_id}: "
-                        f"{gen_path.name} {gen_arr.shape} vs "
-                        f"{ref_path.name} {ref_arr.shape}"
+                        f"{gen_path.name} {tuple(gen_arr.shape)} vs "
+                        f"{ref_path.name} {tuple(ref_arr.shape)}"
                     )
                     continue
 
@@ -801,15 +671,12 @@ def calculate_pairwise_variety_metrics(
     ct_groups: dict[str, list[Path]],
     config: MaisiTestingConfig,
     output_filename: str,
-    comparison_type: str,
 ) -> None:
     """
     Calculate pairwise variety metrics within groups of CT images.
 
-    This function compares all possible image pairs within each patient group.
-    It is used to estimate within-group variety, for example:
-    - real_vs_real: real fraction vs real fraction
-    - generated_vs_generated: generated variant vs generated variant
+    This function compares all possible generated image pairs within each
+    patient group.
 
     Metrics:
     - MAE: lower means more similar voxel intensities
@@ -829,10 +696,6 @@ def calculate_pairwise_variety_metrics(
     output_filename : str
         Name of the per-comparison output CSV file.
 
-    comparison_type : str
-        Label describing the comparison type, e.g.:
-        "generated_vs_generated" or "real_vs_real".
-
     Raises
     ------
     ValueError
@@ -846,6 +709,7 @@ def calculate_pairwise_variety_metrics(
     if len(ct_groups) == 0:
         raise ValueError("`ct_groups` cannot be empty")
 
+    device = torch.device(config.device)
     lpips_model = None
 
     if config.use_lpips:
@@ -859,35 +723,28 @@ def calculate_pairwise_variety_metrics(
             config.use_lpips = False
 
     rows = []
+    desc = "Generated pairwise variety metrics"
 
-    for patient_id, paths in tqdm(ct_groups.items(), desc=comparison_type):
+    for patient_id, paths in tqdm(ct_groups.items(), desc=desc):
         if len(paths) < 2:
-            print(f"Skipping pairwise {comparison_type} for {patient_id}: only {len(paths)} image(s).")
+            print(f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s).")
             continue
 
-        for path_a, path_b in itertools.combinations(paths, 2):
-            arr_a = _to_numpy_hu(
-                _load_tensor(path_a),
-                data_min=config.data_min,
-                data_max=config.data_max,
-            )
-            arr_b = _to_numpy_hu(
-                _load_tensor(path_b),
-                data_min=config.data_min,
-                data_max=config.data_max,
-            )
+        patient_tensors = _cache_patient_cts(paths, config=config, device=device)
 
+        for path_a, path_b in itertools.combinations(paths, 2):
+            arr_a = patient_tensors[path_a]
+            arr_b = patient_tensors[path_b]
             if arr_a.shape != arr_b.shape:
                 print(
                     f"Skipping shape mismatch for {patient_id}: "
-                    f"{path_a.name} {arr_a.shape} vs "
-                    f"{path_b.name} {arr_b.shape}"
+                    f"{path_a.name} {tuple(arr_a.shape)} vs "
+                    f"{path_b.name} {tuple(arr_b.shape)}"
                 )
                 continue
 
             row = {
                 "patient_id": patient_id,
-                "comparison_type": comparison_type,
                 "path_a": str(path_a),
                 "path_b": str(path_b),
                 "mae": mae_3d(arr_a, arr_b),
@@ -909,7 +766,7 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        print(f"Skipping {comparison_type}: no valid pairwise comparisons were calculated")
+        print("Skipping generated pairwise variety metrics: no valid pairwise comparisons were calculated")
         return
 
     df = pd.DataFrame(rows)
@@ -933,7 +790,7 @@ def evaluate_generated_cts(
     """
     Run full CT generation evaluation.
 
-    This function produces up to three metric files:
+    This function produces up to two metric files:
 
     1. generated_vs_real_metrics.csv
        Generated CTs compared to original/reference CTs.
@@ -941,12 +798,9 @@ def evaluate_generated_cts(
     2. generated_pairwise_variety_metrics.csv
        Generated CT variants compared with each other.
 
-    3. real_pairwise_variety_metrics.csv
-       Real/reference CTs compared with each other.
-
     The goal is to check:
     - whether generated CTs are similar to real CTs
-    - whether generated variety is comparable to real anatomical variety
+    - whether generated variants are diverse relative to each other
 
     Parameters
     ----------
@@ -966,8 +820,6 @@ def evaluate_generated_cts(
     """
 
     generated = collect_generated_cts(config.generated_ct_dir)
-    originals = collect_original_cts(config.processed_ct_dir)
-    originals_without_planning = _exclude_planning_cts(originals)
 
     calculate_similarity_metrics(
         config=config,
@@ -977,12 +829,4 @@ def evaluate_generated_cts(
         ct_groups=generated,
         config=config,
         output_filename="generated_pairwise_variety_metrics.csv",
-        comparison_type="generated_vs_generated",
-    )
-
-    calculate_pairwise_variety_metrics(
-        ct_groups=originals_without_planning,
-        config=config,
-        output_filename="real_pairwise_variety_metrics.csv",
-        comparison_type="real_vs_real",
     )

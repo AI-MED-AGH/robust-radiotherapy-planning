@@ -2,10 +2,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import numpy.typing as npt
 import torch
 
-FloatArray = npt.NDArray[np.floating[Any]]
+from src.pipeline.config import MaisiTestingConfig
+
+MetricInput = torch.Tensor | np.ndarray
 
 
 def _is_planning_ct_path(path: str | Path) -> bool:
@@ -77,66 +78,6 @@ def _extract_all_ct_paths(data_path_list: list[str] | list[dict[str, Any]]) -> l
                 seen_paths.add(path)
 
     return ct_paths
-
-
-def _to_numpy_hu(
-    tensor: torch.Tensor,
-    data_min: float,
-    data_max: float,
-) -> FloatArray:
-    """
-    Convert a CT tensor to a NumPy array of HU values rounded to the nearest integer.
-
-    This helper supports two expected intensity formats:
-    - tensors normalized to the range [0, 1]
-    - HU-like tensors in the range approximately [data_min, data_max]
-
-    If the tensor is already outside hu, it is returned rounded as a
-    float32 NumPy array. Otherwise, values are linearly rescaled from [0, 1] to [data_min, data_max].
-
-    Parameters
-    ----------
-    tensor : torch.Tensor
-        Input CT tensor.
-
-    data_min: float
-        Minimum value allowed for the data.
-
-    data_max: float
-        Maximum value allowed for the data.
-
-    Returns
-    -------
-    arr : np.ndarray
-        CT image as a float32 NumPy array normalized to [data_min, data_max].
-
-    Raises
-    ------
-    ValueError
-        If `tensor` is empty.
-        If `tensor` contains NaN or infinite values.
-        If `data_min` is more than `data_max`.
-    """
-
-    if tensor.numel() == 0:
-        raise ValueError("`tensor` cannot be empty")
-
-    if not torch.isfinite(tensor).all():
-        raise ValueError("`tensor` contains NaN or infinite values")
-
-    if data_min >= data_max:
-        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
-
-    arr = tensor.detach().cpu().numpy().astype(np.float32)
-
-    # Case 1: HU-like range [data_min, data_max]
-    if arr.min() < 0.0 or arr.max() > 1.0:
-        return arr.round()
-
-    # Case 2: normalized to [0, 1]
-    arr = ((data_max - data_min) * arr + data_min).astype(np.float32).round()
-
-    return arr
 
 
 def _extract_patient_id(path: str | Path) -> str:
@@ -263,12 +204,278 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
 
     tensor = tensor.float()
 
-    # Remove batch dimension if present.
+    # Remove batch dimension if present
     if tensor.ndim == 5:
         tensor = tensor[0]
 
-    # Remove channel dimension if present.
+    # Remove channel dimension if present
     if tensor.ndim == 4:
         tensor = tensor[0]
 
     return tensor.cpu()
+
+
+def _as_metric_tensor(value: MetricInput, device: torch.device | str | None = None) -> torch.Tensor:
+    """
+    Convert a metric input to a float tensor on an optional target device.
+
+    Parameters
+    ----------
+    value : torch.Tensor | np.ndarray
+        Input image or volume used by metric calculations.
+
+    device : torch.device | str | None, optional
+        Device to move the returned tensor to. If ``None``, tensors stay on
+        their current device and NumPy arrays remain on CPU.
+
+    Returns
+    -------
+    torch.Tensor
+        Detached float tensor suitable for metric calculations.
+    """
+
+    if isinstance(value, np.ndarray):
+        tensor = torch.from_numpy(value)
+    else:
+        tensor = value.detach()
+
+    tensor = tensor.float()
+
+    if device is not None:
+        tensor = tensor.to(device)
+
+    return tensor
+
+
+def _validate_3d_pair(pred: torch.Tensor, ref: torch.Tensor) -> None:
+    """
+    Validate two 3D metric tensors before comparing them.
+
+    Parameters
+    ----------
+    pred : torch.Tensor
+        Predicted or generated 3D image tensor.
+
+    ref : torch.Tensor
+        Reference 3D image tensor.
+
+    Raises
+    ------
+    ValueError
+        If either tensor is empty, not 3D, shape-mismatched, or contains NaN
+        or infinite values.
+    """
+
+    if pred.numel() == 0:
+        raise ValueError("`pred` cannot be empty")
+
+    if ref.numel() == 0:
+        raise ValueError("`ref` cannot be empty")
+
+    if pred.ndim != 3:
+        raise ValueError(f"`pred` must be a 3D tensor. Got shape {tuple(pred.shape)}")
+
+    if ref.ndim != 3:
+        raise ValueError(f"`ref` must be a 3D tensor. Got shape {tuple(ref.shape)}")
+
+    if pred.shape != ref.shape:
+        raise ValueError(f"`pred` and `ref` must have the same shape. Got {tuple(pred.shape)} and {tuple(ref.shape)}")
+
+    if not torch.isfinite(pred).all():
+        raise ValueError("`pred` contains NaN or infinite values")
+
+    if not torch.isfinite(ref).all():
+        raise ValueError("`ref` contains NaN or infinite values")
+
+
+def _to_tensor_hu(
+    tensor: torch.Tensor,
+    data_min: float,
+    data_max: float,
+    device: torch.device | str,
+) -> torch.Tensor:
+    """
+    Convert a CT tensor to rounded HU values on a target device.
+
+    This helper supports tensors already in HU-like units as well as tensors
+    normalized to ``[0, 1]``. Normalized tensors are linearly rescaled to
+    ``[data_min, data_max]``.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Input CT tensor.
+
+    data_min : float
+        Minimum HU value represented by normalized input tensors.
+
+    data_max : float
+        Maximum HU value represented by normalized input tensors.
+
+    device : torch.device | str
+        Device where the returned tensor should live.
+
+    Returns
+    -------
+    torch.Tensor
+        Float tensor of rounded HU values on ``device``.
+
+    Raises
+    ------
+    ValueError
+        If the tensor is empty, contains non-finite values, or ``data_min`` is
+        greater than or equal to ``data_max``.
+    """
+
+    if tensor.numel() == 0:
+        raise ValueError("`tensor` cannot be empty")
+
+    tensor = tensor.detach().float().to(device)
+
+    if not torch.isfinite(tensor).all():
+        raise ValueError("`tensor` contains NaN or infinite values")
+
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    if tensor.min() < 0.0 or tensor.max() > 1.0:
+        return tensor.round()
+
+    return ((data_max - data_min) * tensor + data_min).round()
+
+
+def _load_hu_tensor(
+    path: Path,
+    config: MaisiTestingConfig,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Load one CT tensor file and convert it to HU values on a target device.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the saved CT tensor.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing CT intensity range settings.
+
+    device : torch.device
+        Device where the returned tensor should be cached.
+
+    Returns
+    -------
+    torch.Tensor
+        CT tensor in rounded HU values on ``device``.
+    """
+
+    return _to_tensor_hu(
+        _load_tensor(path),
+        data_min=config.data_min,
+        data_max=config.data_max,
+        device=device,
+    )
+
+
+def _cache_patient_cts(
+    paths: list[Path],
+    config: MaisiTestingConfig,
+    device: torch.device,
+) -> dict[Path, torch.Tensor]:
+    """
+    Load all CT tensors for one patient into device memory.
+
+    Parameters
+    ----------
+    paths : list[Path]
+        CT tensor paths for a single patient.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing CT intensity range settings.
+
+    device : torch.device
+        Device used for metric calculation and cache storage.
+
+    Returns
+    -------
+    dict[Path, torch.Tensor]
+        Mapping from each input path to its loaded HU tensor on ``device``.
+    """
+
+    return {path: _load_hu_tensor(path, config=config, device=device) for path in paths}
+
+
+def _evenly_spaced_slices_for_lpips(
+    arr: MetricInput,
+    max_slices: int = 32,
+) -> torch.Tensor:
+    """
+    Extract evenly spaced 2D CT slices for LPIPS input format.
+
+    LPIPS expects 2D RGB-like images, so this function:
+    - selects up to `max_slices` slices evenly across the full 3D volume
+    - converts slices from shape [H, W, Z] to [Z, H, W]
+    - adds a channel dimension
+    - repeats the single CT channel into 3 channels
+    - rescales values from [0, 1] to [-1, 1]
+
+    Parameters
+    ----------
+    arr : np.ndarray | torch.Tensor
+        Input 3D CT array normalized to [0, 1], expected shape [H, W, Z].
+
+    max_slices : int
+        Maximum number of evenly spaced slices used for LPIPS calculation.
+
+    Returns
+    -------
+    tensor : torch.Tensor
+        Tensor formatted for LPIPS with shape [N, 3, H, W] and range [-1, 1],
+        where N is the number of selected slices.
+
+    Raises
+    ------
+    ValueError
+        If `arr` is empty.
+        If `arr` is not 3-dimensional.
+        If `arr` contains NaN or infinite values.
+        If `arr` is not normalized to [0, 1].
+        If `max_slices` is less than 1.
+    """
+
+    arr_t = _as_metric_tensor(arr)
+
+    if arr_t.numel() == 0:
+        raise ValueError("`arr` cannot be empty")
+
+    if arr_t.ndim != 3:
+        raise ValueError(f"`arr` must be a 3D tensor with shape [H, W, Z]. Got shape {tuple(arr_t.shape)}")
+
+    if not torch.isfinite(arr_t).all():
+        raise ValueError("`arr` contains NaN or infinite values")
+
+    if arr_t.min() < 0.0 or arr_t.max() > 1.0:
+        raise ValueError("`arr` must be normalized to [0, 1] before LPIPS calculation")
+
+    if max_slices < 1:
+        raise ValueError("`max_slices` must be at least 1")
+
+    z_dim = int(arr_t.shape[-1])
+
+    if z_dim <= max_slices:
+        slice_ids = torch.arange(z_dim, device=arr_t.device)
+    else:
+        slice_ids = torch.linspace(
+            0,
+            z_dim - 1,
+            steps=max_slices,
+            device=arr_t.device,
+        ).long()
+
+    tensor = arr_t.index_select(dim=2, index=slice_ids)
+    tensor = tensor.permute(2, 0, 1).unsqueeze(1)  # Z, 1, H, W
+    tensor = tensor.repeat(1, 3, 1, 1)  # Z, 3, H, W
+
+    tensor = tensor * 2.0 - 1.0
+
+    return tensor
