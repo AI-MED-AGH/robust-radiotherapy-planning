@@ -148,7 +148,7 @@ def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
     return float(score.mean().item())
 
 
-def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
+def psnr_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: float) -> float:
     """
     Calculate Peak Signal-to-Noise Ratio (PSNR) between two 3D images.
 
@@ -159,11 +159,11 @@ def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted or generated 3D image array.
+    pred : np.ndarray | torch.Tensor
+        Predicted or generated 3D image.
 
-    ref : np.ndarray
-        Reference 3D image array.
+    ref : np.ndarray | torch.Tensor
+        Reference 3D image.
 
     data_min: float
         Minimum value allowed for the data.
@@ -187,51 +187,37 @@ def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
         If data falls outside of [data_min, data_max].
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
-
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
-
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
+    pred_t = _as_metric_tensor(pred)
+    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    _validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
 
-    if pred.min() < data_min or pred.max() > data_max:
+    pred_min = float(pred_t.min().item())
+    pred_max = float(pred_t.max().item())
+    ref_min = float(ref_t.min().item())
+    ref_max = float(ref_t.max().item())
+
+    if pred_min < data_min or pred_max > data_max:
         raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred.min()}, max={pred.max()}"
+            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
         )
 
-    if ref.min() < data_min or ref.max() > data_max:
-        raise ValueError(
-            f"`ref` values must be in the range [data_min, data_max], got min={ref.min()}, max={ref.max()}"
-        )
+    if ref_min < data_min or ref_max > data_max:
+        raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
 
-    mse = float(np.mean((pred - ref) ** 2))
+    mse = torch.mean((pred_t - ref_t) ** 2)
 
-    if mse == 0.0:
+    if float(mse.item()) == 0.0:
         return float("inf")
 
     data_range = data_max - data_min
 
-    return float(10.0 * np.log10((data_range**2) / mse))
+    return float((10.0 * torch.log10(torch.tensor(data_range**2, device=pred_t.device) / mse)).item())
 
 
-def sobel_edge_map_3d(arr: np.ndarray) -> FloatArray:
+def sobel_edge_map_3d(arr: MetricInput) -> torch.Tensor:
     """
     Calculate a 3D Sobel edge magnitude map.
 
