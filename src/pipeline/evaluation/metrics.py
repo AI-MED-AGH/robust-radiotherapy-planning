@@ -115,9 +115,7 @@ def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
     ref_max = float(ref_t.max().item())
 
     if pred_min < data_min or pred_max > data_max:
-        raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
-        )
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
 
     if ref_min < data_min or ref_max > data_max:
         raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
@@ -200,9 +198,7 @@ def psnr_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
     ref_max = float(ref_t.max().item())
 
     if pred_min < data_min or pred_max > data_max:
-        raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
-        )
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
 
     if ref_min < data_min or ref_max > data_max:
         raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
