@@ -214,7 +214,18 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
 
 
 def _default_metric_device() -> torch.device:
-    """Return the default device for metrics that start from NumPy arrays."""
+    """
+    Return the fallback device for metric calculations.
+
+    The evaluation metrics operate on torch tensors. When callers provide only
+    NumPy arrays, there is no existing tensor device to preserve, so metrics
+    prefer CUDA when available and otherwise run on CPU.
+
+    Returns
+    -------
+    torch.device
+        CUDA device when CUDA is available; otherwise CPU.
+    """
 
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -223,15 +234,35 @@ def _default_metric_device() -> torch.device:
 
 
 def _resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
-    """Choose a metric device from existing tensor inputs or available hardware."""
+    """
+    Choose the device used to compare metric inputs.
 
+    Existing tensor devices are preserved. Accelerator tensors take priority
+    so mixed tensor/NumPy inputs stay on the accelerator. If all tensor inputs
+    are on CPU, CPU is used. If every input is a NumPy array, metrics use the
+    default metric device.
+
+    Parameters
+    ----------
+    values : torch.Tensor | np.ndarray
+        Metric inputs whose devices should be respected when possible.
+
+    Returns
+    -------
+    torch.device
+        Device on which metric tensors should be created or moved.
+    """
+
+    cpu_device: torch.device | None = None
     for value in values:
         if isinstance(value, torch.Tensor) and value.device.type != "cpu":
             return value.device
 
-    for value in values:
         if isinstance(value, torch.Tensor):
-            return value.device
+            cpu_device = value.device
+
+    if cpu_device is not None:
+        return cpu_device
 
     return _default_metric_device()
 

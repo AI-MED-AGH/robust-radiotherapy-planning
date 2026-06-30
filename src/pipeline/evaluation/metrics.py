@@ -35,10 +35,10 @@ def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> f
 
     Parameters
     ----------
-    pred : np.ndarray | torch.Tensor
+    pred : torch.Tensor | np.ndarray
         Predicted or generated 3D image.
 
-    ref : np.ndarray | torch.Tensor
+    ref : torch.Tensor | np.ndarray
         Reference 3D image.
 
     Returns
@@ -74,10 +74,10 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
 
     Parameters
     ----------
-    pred : np.ndarray | torch.Tensor
+    pred : torch.Tensor | np.ndarray
         Predicted 3D image.
 
-    ref : np.ndarray | torch.Tensor
+    ref : torch.Tensor | np.ndarray
         Reference (ground-truth) 3D image.
 
     Returns
@@ -159,10 +159,10 @@ def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
 
     Parameters
     ----------
-    pred : np.ndarray | torch.Tensor
+    pred : torch.Tensor | np.ndarray
         Predicted or generated 3D image.
 
-    ref : np.ndarray | torch.Tensor
+    ref : torch.Tensor | np.ndarray
         Reference 3D image.
 
     data_min: float
@@ -230,7 +230,7 @@ def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
 
     Parameters
     ----------
-    arr : np.ndarray | torch.Tensor
+    arr : torch.Tensor | np.ndarray
         Input 3D image.
 
     Returns
@@ -284,10 +284,10 @@ def sob_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> f
 
     Parameters
     ----------
-    pred : np.ndarray | torch.Tensor
+    pred : torch.Tensor | np.ndarray
         Predicted or generated 3D image.
 
-    ref : np.ndarray | torch.Tensor
+    ref : torch.Tensor | np.ndarray
         Reference 3D image.
 
     Returns
@@ -316,10 +316,12 @@ def sob_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> f
 
 
 def lpips_3d(
-    config: MaisiTestingConfig,
     lpips_model: LPIPSModel,
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
+    data_min: float,
+    data_max: float,
+    max_slices: int,
 ) -> float:
     """
     Calculate slice-wise LPIPS between two 3D images and average the result.
@@ -340,17 +342,23 @@ def lpips_3d(
 
     Parameters
     ----------
-    config : MaisiTestingConfig
-         Configuration object containing LPIPS settings.
-
     lpips_model : LPIPSModel
         Initialized LPIPS model.
 
-    pred : np.ndarray | torch.Tensor
+    pred : torch.Tensor | np.ndarray
         Predicted or generated 3D CT array normalized to [data_min, data_max].
 
-    ref : np.ndarray | torch.Tensor
+    ref : torch.Tensor | np.ndarray
         Reference 3D CT array normalized to [data_min, data_max].
+
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
+    max_slices : int
+        Maximum number of evenly spaced slices used for LPIPS calculation.
 
     Returns
     -------
@@ -368,25 +376,28 @@ def lpips_3d(
         If `max_slices` is less than 1.
     """
 
-    device = torch.device(config.device)
+    device = _resolve_metric_device(pred, ref)
     pred_t = _as_metric_tensor(pred, device=device)
     ref_t = _as_metric_tensor(ref, device=device)
     _validate_3d_pair(pred_t, ref_t)
 
-    if pred_t.min() < config.data_min or pred_t.max() > config.data_max:
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    if pred_t.min() < data_min or pred_t.max() > data_max:
         raise ValueError("`pred` must be normalized to [data_min, data_max]")
 
-    if ref_t.min() < config.data_min or ref_t.max() > config.data_max:
+    if ref_t.min() < data_min or ref_t.max() > data_max:
         raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
     pred_tensor = _evenly_spaced_slices_for_lpips(
-        (pred_t - config.data_min) / (config.data_max - config.data_min),
-        max_slices=config.max_lpips_slices,
+        (pred_t - data_min) / (data_max - data_min),
+        max_slices=max_slices,
     )
 
     ref_tensor = _evenly_spaced_slices_for_lpips(
-        (ref_t - config.data_min) / (config.data_max - config.data_min),
-        max_slices=config.max_lpips_slices,
+        (ref_t - data_min) / (data_max - data_min),
+        max_slices=max_slices,
     )
 
     with torch.no_grad():
@@ -623,10 +634,12 @@ def calculate_similarity_metrics(
 
                 if config.use_lpips and lpips_model is not None:
                     row["lpips"] = lpips_3d(
-                        config=config,
                         lpips_model=lpips_model,
                         pred=gen_arr,
                         ref=ref_arr,
+                        data_min=config.data_min,
+                        data_max=config.data_max,
+                        max_slices=config.max_lpips_slices,
                     )
                 else:
                     row["lpips"] = np.nan
@@ -746,7 +759,9 @@ def calculate_pairwise_variety_metrics(
                     pred=arr_a,
                     ref=arr_b,
                     lpips_model=lpips_model,
-                    config=config,
+                    data_min=config.data_min,
+                    data_max=config.data_max,
+                    max_slices=config.max_lpips_slices,
                 )
             else:
                 row["lpips"] = np.nan
