@@ -201,14 +201,10 @@ def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
     ref_max = float(ref_t.max().item())
 
     if pred_min < data_min or pred_max > data_max:
-        raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
-        )
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
 
     if ref_min < data_min or ref_max > data_max:
-        raise ValueError(
-            f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}"
-        )
+        raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
 
     mse = torch.mean((pred_t - ref_t).square())
 
