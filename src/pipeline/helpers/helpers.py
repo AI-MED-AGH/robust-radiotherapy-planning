@@ -244,7 +244,7 @@ def _resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
 
     Parameters
     ----------
-    values : torch.Tensor | np.ndarray
+    *values : torch.Tensor | np.ndarray
         Metric inputs whose devices should be respected when possible.
 
     Returns
