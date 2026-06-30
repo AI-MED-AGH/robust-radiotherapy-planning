@@ -12,12 +12,12 @@ from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
-    MetricInput,
     _as_metric_tensor,
     _cache_patient_cts,
     _evenly_spaced_slices_for_lpips,
     _exclude_planning_cts,
     _extract_patient_id,
+    _resolve_metric_device,
     _validate_3d_pair,
 )
 
@@ -26,7 +26,7 @@ class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
-def mae_3d(pred: MetricInput, ref: MetricInput) -> float:
+def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
     """
     Calculate mean absolute error between two 3D images.
 
@@ -55,14 +55,15 @@ def mae_3d(pred: MetricInput, ref: MetricInput) -> float:
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    pred_t = _as_metric_tensor(pred)
-    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
     _validate_3d_pair(pred_t, ref_t)
 
     return float(torch.mean(torch.abs(pred_t - ref_t)).item())
 
 
-def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: float) -> float:
+def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, data_min: float, data_max: float) -> float:
     """
     Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
 
@@ -102,8 +103,9 @@ def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
         If data falls outside of [data_min, data_max].
     """
 
-    pred_t = _as_metric_tensor(pred)
-    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
     _validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
@@ -115,9 +117,7 @@ def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
     ref_max = float(ref_t.max().item())
 
     if pred_min < data_min or pred_max > data_max:
-        raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
-        )
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
 
     if ref_min < data_min or ref_max > data_max:
         raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
@@ -148,7 +148,7 @@ def ssim_3d(pred: MetricInput, ref: MetricInput, data_min: float, data_max: floa
     return float(score.mean().item())
 
 
-def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float) -> float:
+def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, data_min: float, data_max: float) -> float:
     """
     Calculate Peak Signal-to-Noise Ratio (PSNR) between two 3D images.
 
@@ -159,11 +159,11 @@ def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
 
     Parameters
     ----------
-    pred : np.ndarray
-        Predicted or generated 3D image array.
+    pred : np.ndarray | torch.Tensor
+        Predicted or generated 3D image.
 
-    ref : np.ndarray
-        Reference 3D image array.
+    ref : np.ndarray | torch.Tensor
+        Reference 3D image.
 
     data_min: float
         Minimum value allowed for the data.
@@ -187,51 +187,42 @@ def psnr_3d(pred: np.ndarray, ref: np.ndarray, data_min: float, data_max: float)
         If data falls outside of [data_min, data_max].
     """
 
-    if pred.size == 0:
-        raise ValueError("`pred` cannot be empty")
-
-    if ref.size == 0:
-        raise ValueError("`ref` cannot be empty")
-
-    if pred.ndim != 3:
-        raise ValueError(f"`pred` must be a 3D array. Got shape {pred.shape}")
-
-    if ref.ndim != 3:
-        raise ValueError(f"`ref` must be a 3D array. Got shape {ref.shape}")
-
-    if pred.shape != ref.shape:
-        raise ValueError(f"`pred` and `ref` must have the same shape. Got {pred.shape} and {ref.shape}")
-
-    if not np.isfinite(pred).all():
-        raise ValueError("`pred` contains NaN or infinite values")
-
-    if not np.isfinite(ref).all():
-        raise ValueError("`ref` contains NaN or infinite values")
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
 
-    if pred.min() < data_min or pred.max() > data_max:
+    pred_min = float(pred_t.min().item())
+    pred_max = float(pred_t.max().item())
+    ref_min = float(ref_t.min().item())
+    ref_max = float(ref_t.max().item())
+
+    if pred_min < data_min or pred_max > data_max:
         raise ValueError(
-            f"`pred` values must be in the range [data_min, data_max], got min={pred.min()}, max={pred.max()}"
+            f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}"
         )
 
-    if ref.min() < data_min or ref.max() > data_max:
+    if ref_min < data_min or ref_max > data_max:
         raise ValueError(
-            f"`ref` values must be in the range [data_min, data_max], got min={ref.min()}, max={ref.max()}"
+            f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}"
         )
 
-    mse = float(np.mean((pred - ref) ** 2))
+    mse = torch.mean((pred_t - ref_t).square())
 
-    if mse == 0.0:
+    if float(mse.item()) == 0.0:
         return float("inf")
 
     data_range = data_max - data_min
 
-    return float(10.0 * np.log10((data_range**2) / mse))
+    psnr = 10.0 * torch.log10(torch.as_tensor((data_range**2), dtype=pred_t.dtype, device=device) / mse)
+
+    return float(psnr.item())
 
 
-def sobel_edge_map_3d(arr: MetricInput) -> torch.Tensor:
+def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
     """
     Calculate a 3D Sobel edge magnitude map.
 
@@ -284,7 +275,7 @@ def sobel_edge_map_3d(arr: MetricInput) -> torch.Tensor:
     return cast(torch.Tensor, torch.linalg.vector_norm(gradients.squeeze(0), dim=0))
 
 
-def sob_3d(pred: MetricInput, ref: MetricInput) -> float:
+def sob_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
     """
     Calculate SOB / Sobel-based edge difference between two 3D images.
 
@@ -317,8 +308,9 @@ def sob_3d(pred: MetricInput, ref: MetricInput) -> float:
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    pred_t = _as_metric_tensor(pred)
-    ref_t = _as_metric_tensor(ref, device=pred_t.device)
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
     _validate_3d_pair(pred_t, ref_t)
 
     pred_edge = sobel_edge_map_3d(pred_t)
@@ -330,8 +322,8 @@ def sob_3d(pred: MetricInput, ref: MetricInput) -> float:
 def lpips_3d(
     config: MaisiTestingConfig,
     lpips_model: LPIPSModel,
-    pred: MetricInput,
-    ref: MetricInput,
+    pred: torch.Tensor | np.ndarray,
+    ref: torch.Tensor | np.ndarray,
 ) -> float:
     """
     Calculate slice-wise LPIPS between two 3D images and average the result.

@@ -6,8 +6,6 @@ import torch
 
 from src.pipeline.config import MaisiTestingConfig
 
-MetricInput = torch.Tensor | np.ndarray
-
 
 def _is_planning_ct_path(path: str | Path) -> bool:
     """Determine whether a CT path identifies the planning scan.
@@ -215,7 +213,30 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
     return tensor.cpu()
 
 
-def _as_metric_tensor(value: MetricInput, device: torch.device | str | None = None) -> torch.Tensor:
+def _default_metric_device() -> torch.device:
+    """Return the default device for metrics that start from NumPy arrays."""
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    return torch.device("cpu")
+
+
+def _resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
+    """Choose a metric device from existing tensor inputs or available hardware."""
+
+    for value in values:
+        if isinstance(value, torch.Tensor) and value.device.type != "cpu":
+            return value.device
+
+    for value in values:
+        if isinstance(value, torch.Tensor):
+            return value.device
+
+    return _default_metric_device()
+
+
+def _as_metric_tensor(value: torch.Tensor | np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
     """
     Convert a metric input to a float tensor on an optional target device.
 
@@ -226,7 +247,7 @@ def _as_metric_tensor(value: MetricInput, device: torch.device | str | None = No
 
     device : torch.device | str | None, optional
         Device to move the returned tensor to. If ``None``, tensors stay on
-        their current device and NumPy arrays remain on CPU.
+        their current device and NumPy arrays use the default metric device.
 
     Returns
     -------
@@ -234,15 +255,17 @@ def _as_metric_tensor(value: MetricInput, device: torch.device | str | None = No
         Detached float tensor suitable for metric calculations.
     """
 
+    target_device = torch.device(device) if device is not None else None
+
     if isinstance(value, np.ndarray):
-        tensor = torch.from_numpy(value)
+        tensor = torch.as_tensor(value, device=target_device or _default_metric_device())
     else:
         tensor = value.detach()
 
     tensor = tensor.float()
 
-    if device is not None:
-        tensor = tensor.to(device)
+    if target_device is not None:
+        tensor = tensor.to(target_device)
 
     return tensor
 
@@ -406,7 +429,7 @@ def _cache_patient_cts(
 
 
 def _evenly_spaced_slices_for_lpips(
-    arr: MetricInput,
+    arr: torch.Tensor | np.ndarray,
     max_slices: int = 32,
 ) -> torch.Tensor:
     """
