@@ -1,0 +1,512 @@
+from pathlib import Path
+from typing import Protocol, cast
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from monai.metrics.regression import SSIMMetric
+from tqdm import tqdm
+
+from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.helpers import (
+    _as_metric_tensor,
+    _cache_patient_cts,
+    _evenly_spaced_slices_for_lpips,
+    _exclude_planning_cts,
+    _resolve_metric_device,
+    _validate_3d_pair,
+)
+
+
+class LPIPSModel(Protocol):
+    def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
+
+
+def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
+    """
+    Calculate mean absolute error between two 3D images.
+
+    MAE measures the average absolute voxel-wise difference between the
+    predicted/generated CT and the reference CT.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted or generated 3D image.
+
+    ref : torch.Tensor | np.ndarray
+        Reference 3D image.
+
+    Returns
+    -------
+    mae : float
+        Mean absolute error between `pred` and `ref`.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` or `ref` contains NaN or infinite values.
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
+
+    return float(torch.mean(torch.abs(pred_t - ref_t)).item())
+
+
+def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, data_min: float, data_max: float) -> float:
+    """
+    Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
+
+    This function computes SSIM slice-by-slice along the z-axis and returns
+    the average score across all slices. It is intended for comparing
+    volumetric medical images such as CT scans while using the standard
+    2D SSIM implementation.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted 3D image.
+
+    ref : torch.Tensor | np.ndarray
+        Reference (ground-truth) 3D image.
+
+    Returns
+    -------
+    score : float
+        Mean SSIM score averaged across all z-axis slices.
+        Values closer to 1 indicate higher structural similarity.
+
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` or `ref` contains NaN or infinite values.
+        If `data_min` is greater than `data_max`.
+        If data falls outside of [data_min, data_max].
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
+
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    pred_min = float(pred_t.min().item())
+    pred_max = float(pred_t.max().item())
+    ref_min = float(ref_t.min().item())
+    ref_max = float(ref_t.max().item())
+
+    if pred_min < data_min or pred_max > data_max:
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
+
+    if ref_min < data_min or ref_max > data_max:
+        raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
+
+    window_size = min(11, *(int(dim) for dim in pred_t.shape))
+    if window_size % 2 == 0:
+        window_size -= 1
+
+    if window_size < 3:
+        raise ValueError(f"SSIM window is invalid for image shape {tuple(pred_t.shape)}")
+
+    metric = SSIMMetric(
+        spatial_dims=3,
+        data_range=data_max - data_min,
+        kernel_type="uniform",
+        win_size=window_size,
+    )
+
+    with torch.no_grad():
+        score = cast(
+            torch.Tensor,
+            metric(
+                pred_t.unsqueeze(0).unsqueeze(0),
+                ref_t.unsqueeze(0).unsqueeze(0),
+            ),
+        )
+
+    return float(score.mean().item())
+
+
+def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, data_min: float, data_max: float) -> float:
+    """
+    Calculate Peak Signal-to-Noise Ratio (PSNR) between two 3D images.
+
+    PSNR measures reconstruction quality from the mean squared voxel-wise
+    difference between the predicted/generated CT and the reference CT.
+    Higher values indicate closer agreement. Identical volumes return
+    positive infinity, matching the standard PSNR definition.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted or generated 3D image.
+
+    ref : torch.Tensor | np.ndarray
+        Reference 3D image.
+
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
+    Returns
+    -------
+    psnr : float
+        Peak Signal-to-Noise Ratio in decibels.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` or `ref` contains NaN or infinite values.
+        If `data_min` is greater than or equal to `data_max`.
+        If data falls outside of [data_min, data_max].
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
+
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    pred_min = float(pred_t.min().item())
+    pred_max = float(pred_t.max().item())
+    ref_min = float(ref_t.min().item())
+    ref_max = float(ref_t.max().item())
+
+    if pred_min < data_min or pred_max > data_max:
+        raise ValueError(f"`pred` values must be in the range [data_min, data_max], got min={pred_min}, max={pred_max}")
+
+    if ref_min < data_min or ref_max > data_max:
+        raise ValueError(f"`ref` values must be in the range [data_min, data_max], got min={ref_min}, max={ref_max}")
+
+    mse = torch.mean((pred_t - ref_t).square())
+
+    if float(mse.item()) == 0.0:
+        return float("inf")
+
+    data_range = data_max - data_min
+    psnr = 10.0 * torch.log10(torch.as_tensor((data_range**2), dtype=pred_t.dtype, device=device) / mse)
+
+    return float(psnr.item())
+
+
+def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
+    """
+    Calculate a 3D Sobel edge magnitude map.
+
+    This function applies the Sobel operator along all three spatial axes and
+    combines the resulting gradients into one edge-magnitude image.
+
+    It can be used for SOB / Sobel-based edge similarity, where the goal is to
+    compare whether two CT images have similar anatomical edge structure.
+
+    Parameters
+    ----------
+    arr : torch.Tensor | np.ndarray
+        Input 3D image.
+
+    Returns
+    -------
+    edge : torch.Tensor
+        3D Sobel edge magnitude map.
+
+    Raises
+    ------
+    ValueError
+        If `arr` is empty.
+        If `arr` is not 3-dimensional.
+        If `arr` contains NaN or infinite values.
+    """
+
+    arr_t = _as_metric_tensor(arr)
+
+    if arr_t.numel() == 0:
+        raise ValueError("`arr` cannot be empty")
+
+    if arr_t.ndim != 3:
+        raise ValueError(f"`arr` must be a 3D tensor with shape [H, W, Z]. Got shape {tuple(arr_t.shape)}")
+
+    if not torch.isfinite(arr_t).all():
+        raise ValueError("`arr` contains NaN or infinite values")
+
+    derivative = torch.tensor([-1.0, 0.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
+    smoothing = torch.tensor([1.0, 2.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
+
+    kernel_x = derivative[:, None, None] * smoothing[None, :, None] * smoothing[None, None, :]
+    kernel_y = smoothing[:, None, None] * derivative[None, :, None] * smoothing[None, None, :]
+    kernel_z = smoothing[:, None, None] * smoothing[None, :, None] * derivative[None, None, :]
+    kernels = torch.stack([kernel_x, kernel_y, kernel_z]).unsqueeze(1)
+
+    volume = arr_t.unsqueeze(0).unsqueeze(0)
+    gradients = F.conv3d(volume, kernels, padding=1)
+
+    return cast(torch.Tensor, torch.linalg.vector_norm(gradients.squeeze(0), dim=0))
+
+
+def sob_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
+    """
+    Calculate SOB / Sobel-based edge difference between two 3D images.
+
+    This metric computes Sobel edge maps for the predicted/generated image
+    and the reference image, then returns the mean absolute difference between
+    those edge maps.
+
+    Lower values mean the generated image has a more similar edge or structure
+    pattern to the reference CT.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted or generated 3D image.
+
+    ref : torch.Tensor | np.ndarray
+        Reference 3D image.
+
+    Returns
+    -------
+    sob : float
+        Mean absolute difference between Sobel edge maps.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` contains NaN or infinite values.
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
+
+    pred_edge = sobel_edge_map_3d(pred_t)
+    ref_edge = sobel_edge_map_3d(ref_t)
+
+    return float(torch.mean(torch.abs(pred_edge - ref_edge)).item())
+
+
+def lpips_3d(
+    lpips_model: LPIPSModel,
+    pred: torch.Tensor | np.ndarray,
+    ref: torch.Tensor | np.ndarray,
+    data_min: float,
+    data_max: float,
+    max_slices: int,
+) -> float:
+    """
+    Calculate slice-wise LPIPS between two 3D images and average the result.
+
+    LPIPS is normally defined for 2D RGB images. For 3D CT volumes, this
+    function selects evenly spaced slices across the full volume, converts them
+    to LPIPS input format, computes LPIPS slice-wise, and returns the mean score.
+
+    Using evenly spaced slices makes the metric less sensitive to one noisy or
+    unrepresentative center slice.
+
+    Interpretation:
+    - Higher LPIPS means greater perceptual difference.
+    - When comparing generated variants with each other, higher pairwise LPIPS
+    usually suggests higher visual diversity.
+    - When comparing generated CTs to reference CTs, lower LPIPS means higher
+    perceptual similarity.
+
+    Parameters
+    ----------
+    lpips_model : LPIPSModel
+        Initialized LPIPS model.
+
+    pred : torch.Tensor | np.ndarray
+        Predicted or generated 3D CT array normalized to [data_min, data_max].
+
+    ref : torch.Tensor | np.ndarray
+        Reference 3D CT array normalized to [data_min, data_max].
+
+    data_min: float
+        Minimum value allowed for the data.
+
+    data_max: float
+        Maximum value allowed for the data.
+
+    max_slices : int
+        Maximum number of evenly spaced slices used for LPIPS calculation.
+
+    Returns
+    -------
+    lpips_score : float
+        Mean LPIPS score across selected slices.
+
+    Raises
+    ------
+    ValueError
+        If `pred` or `ref` is empty.
+        If `pred` or `ref` is not 3-dimensional.
+        If `pred` and `ref` have different shapes.
+        If `pred` or `ref` contains NaN or infinite values.
+        If `pred` or `ref` is not normalized to [data_min, data_max].
+        If `max_slices` is less than 1.
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device)
+    ref_t = _as_metric_tensor(ref, device=device)
+    _validate_3d_pair(pred_t, ref_t)
+
+    if data_min >= data_max:
+        raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
+
+    if pred_t.min() < data_min or pred_t.max() > data_max:
+        raise ValueError("`pred` must be normalized to [data_min, data_max]")
+
+    if ref_t.min() < data_min or ref_t.max() > data_max:
+        raise ValueError("`ref` must be normalized to [data_min, data_max]")
+
+    pred_tensor = _evenly_spaced_slices_for_lpips(
+        (pred_t - data_min) / (data_max - data_min),
+        max_slices=max_slices,
+    )
+
+    ref_tensor = _evenly_spaced_slices_for_lpips(
+        (ref_t - data_min) / (data_max - data_min),
+        max_slices=max_slices,
+    )
+
+    with torch.no_grad():
+        score = lpips_model(pred_tensor, ref_tensor)
+
+    return float(score.mean().item())
+
+
+def calculate_similarity_metrics(
+    generated: dict[str, list[Path]],
+    originals: dict[str, list[Path]],
+    config: MaisiTestingConfig,
+    lpips_model: LPIPSModel | None = None,
+) -> None:
+    """
+    Calculate generated-vs-real CT similarity metrics.
+
+    This function compares generated CT variants with available non-planning
+    original/reference CT tensors for the same patient. It is robust to missing
+    generated variants and calculates only comparisons that are possible.
+
+    Metrics:
+    - MAE: lower is better
+    - SSIM: higher is better
+    - PSNR: higher is better
+    - SOB/Sobel MAE: lower is better
+    - LPIPS: higher means greater perceptual difference
+
+    Outputs:
+    - generated_vs_real_metrics.csv
+        Per-comparison metrics.
+    - generated_vs_real_summary.csv
+        Patient-level summary statistics.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Configuration object containing evaluation settings and directory paths.
+
+    Raises
+    ------
+    ValueError
+        If no valid comparisons can be calculated.
+    """
+
+    device = torch.device(config.device)
+    rows = []
+
+    for patient_id, gen_paths in tqdm(
+        generated.items(),
+        desc="Generated vs real image metrics",
+    ):
+        all_ref_paths = originals.get(patient_id, [])
+        ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
+
+        if len(all_ref_paths) == 0:
+            print(f"Skipping {patient_id}: no original/reference CT found")
+            continue
+
+        if len(ref_paths) == 0:
+            print(f"Skipping {patient_id}: no non-planning original/reference CT found")
+            continue
+
+        patient_paths = [*gen_paths, *ref_paths]
+        patient_tensors = _cache_patient_cts(patient_paths, config=config, device=device)
+
+        for gen_path in gen_paths:
+            gen_arr = patient_tensors[gen_path]
+            for ref_path in ref_paths:
+                ref_arr = patient_tensors[ref_path]
+
+                if gen_arr.shape != ref_arr.shape:
+                    print(
+                        f"Skipping shape mismatch for {patient_id}: "
+                        f"{gen_path.name} {tuple(gen_arr.shape)} vs "
+                        f"{ref_path.name} {tuple(ref_arr.shape)}"
+                    )
+                    continue
+
+                row = {
+                    "patient_id": patient_id,
+                    "comparison_type": "generated_vs_real",
+                    "generated_path": str(gen_path),
+                    "reference_path": str(ref_path),
+                    "mae": mae_3d(gen_arr, ref_arr),
+                    "ssim": ssim_3d(gen_arr, ref_arr, config.data_min, config.data_max),
+                    "psnr": psnr_3d(gen_arr, ref_arr, config.data_min, config.data_max),
+                    "sob": sob_3d(gen_arr, ref_arr),
+                    "lpips": np.nan,
+                }
+
+                if config.use_lpips and lpips_model is not None:
+                    row["lpips"] = lpips_3d(
+                        lpips_model=lpips_model,
+                        pred=gen_arr,
+                        ref=ref_arr,
+                        data_min=config.data_min,
+                        data_max=config.data_max,
+                        max_slices=config.max_lpips_slices,
+                    )
+
+                rows.append(row)
+
+    if len(rows) == 0:
+        raise ValueError(
+            "No valid generated-vs-real comparisons were calculated. "
+            "Check whether patient IDs match and tensor shapes are compatible"
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(config.metrics_dir / "generated_vs_real_metrics.csv", index=False)
+
+    summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
+        ["mean", "std", "min", "max", "count"]
+    )
+    summary.to_csv(config.metrics_dir / "generated_vs_real_summary.csv")

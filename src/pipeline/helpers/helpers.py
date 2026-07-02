@@ -2,7 +2,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import SimpleITK as sitk
 import torch
+import torch.nn.functional as F
 
 from src.pipeline.config import MaisiTestingConfig
 
@@ -533,3 +535,320 @@ def _evenly_spaced_slices_for_lpips(
     tensor = tensor * 2.0 - 1.0
 
     return tensor
+
+
+def _as_binary_mask_pair(
+    pred: torch.Tensor | np.ndarray,
+    ref: torch.Tensor | np.ndarray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Convert two mask-like inputs to validated boolean 3D tensors.
+
+    This helper centralizes mask validation for DSC and Hausdorff metrics. Any
+    non-zero value is treated as foreground, which supports binary masks saved
+    as integer, float, or boolean arrays.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted, generated, or warped mask-like 3D array.
+
+    ref : torch.Tensor | np.ndarray
+        Reference mask-like 3D array.
+
+    Returns
+    -------
+    pred_t : torch.Tensor
+        Boolean tensor for the predicted mask.
+
+    ref_t : torch.Tensor
+        Boolean tensor for the reference mask.
+
+    Raises
+    ------
+    ValueError
+        If either mask is empty.
+        If either mask is not 3-dimensional.
+        If the masks have different shapes.
+    """
+
+    device = _resolve_metric_device(pred, ref)
+    pred_t = _as_metric_tensor(pred, device=device) > 0
+    ref_t = _as_metric_tensor(ref, device=device) > 0
+
+    if pred_t.numel() == 0 or ref_t.numel() == 0:
+        raise ValueError("Masks cannot be empty")
+
+    if pred_t.ndim != 3 or ref_t.ndim != 3:
+        raise ValueError(f"Masks must be 3D. Got {tuple(pred_t.shape)} and {tuple(ref_t.shape)}")
+
+    if pred_t.shape != ref_t.shape:
+        raise ValueError(f"Masks must have the same shape. Got {tuple(pred_t.shape)} and {tuple(ref_t.shape)}")
+
+    return pred_t, ref_t
+
+
+def _surface_voxels(mask: torch.Tensor) -> torch.Tensor:
+    """
+    Identify foreground surface voxels in a 3D binary mask.
+
+    A foreground voxel is considered part of the surface when its 3x3x3
+    neighborhood is not completely filled with foreground. Padding makes
+    foreground voxels on the image boundary count as surface voxels.
+
+    Parameters
+    ----------
+    mask : torch.Tensor
+        Boolean 3D foreground mask.
+
+    Returns
+    -------
+    surface : torch.Tensor
+        Boolean 3D mask containing only foreground surface voxels.
+    """
+
+    volume = mask.float().unsqueeze(0).unsqueeze(0)
+    kernel = torch.ones((1, 1, 3, 3, 3), dtype=torch.float32, device=mask.device)
+    neighbor_count = F.conv3d(volume, kernel, padding=1).squeeze(0).squeeze(0)
+
+    return mask & (neighbor_count < 27.0)
+
+
+def _nearest_distances(
+    source_points: torch.Tensor,
+    target_points: torch.Tensor,
+    batch_size: int = 4096,
+) -> torch.Tensor:
+    """
+    Calculate nearest-neighbor distances from source points to target points.
+
+    Distances are computed in batches to avoid materializing one very large
+    pairwise distance matrix for large structure surfaces.
+
+    Parameters
+    ----------
+    source_points : torch.Tensor
+        Tensor of source coordinates with shape ``[N, 3]``.
+
+    target_points : torch.Tensor
+        Tensor of target coordinates with shape ``[M, 3]``.
+
+    batch_size : int
+        Number of source points processed per distance batch.
+
+    Returns
+    -------
+    distances : torch.Tensor
+        One nearest-target distance for each source point, shape ``[N]``.
+    """
+
+    chunks = []
+    for start in range(0, source_points.shape[0], batch_size):
+        chunk = source_points[start : start + batch_size]
+        chunks.append(torch.cdist(chunk, target_points).min(dim=1).values)
+
+    return torch.cat(chunks)
+
+
+def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
+    """
+    Resolve the original structure label-map path for a processed CT tensor.
+
+    Processed CT tensors are saved as ``.pt`` files, while structure label maps
+    remain in the original ``STRUCTURES`` tree as ``.nii.gz`` files. This helper
+    maps the processed tensor filename back to the matching original structure
+    filename using the patient ID and fraction name.
+
+    Parameters
+    ----------
+    ct_path : Path
+        Processed CT tensor path, for example
+        ``Patient_01_fraction_2_.pt``.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing ``structures_root``.
+
+    Returns
+    -------
+    structure_path : Path
+        Expected path to the corresponding structure label-map NIfTI file.
+    """
+
+    patient_id = _extract_patient_id(ct_path)
+    structure_name = ct_path.name.replace(".pt", ".nii.gz")
+    return config.structures_root / patient_id / structure_name
+
+
+def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: Any) -> Any:
+    """
+    Convert a pipeline tensor to a SimpleITK image.
+
+    Pipeline tensors use shape ``[H, W, D]``. SimpleITK images are created from
+    arrays ordered as ``[D, H, W]``, so the tensor axes are transposed before
+    conversion. Spacing is also reversed to match the SimpleITK x/y/z axis
+    convention.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Pipeline image or mask tensor with shape ``[H, W, D]``.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing voxel spacing.
+
+    pixel_id : Any
+        SimpleITK pixel type, usually ``sitk.sitkFloat32`` for CT images or
+        ``sitk.sitkUInt8`` for masks.
+
+    Returns
+    -------
+    image : Any
+        SimpleITK image with spacing and identity physical metadata assigned.
+    """
+
+    arr = tensor.detach().cpu().numpy()
+    arr = np.transpose(arr, (2, 0, 1))
+    image = sitk.GetImageFromArray(arr.astype(np.float32 if pixel_id == sitk.sitkFloat32 else np.uint8))
+    image.SetSpacing((config.spacing[2], config.spacing[1], config.spacing[0]))
+    image.SetOrigin((0.0, 0.0, 0.0))
+    image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    return image
+
+
+def _sitk_image_to_tensor(image: Any) -> torch.Tensor:
+    """
+    Convert a SimpleITK image back to a pipeline tensor.
+
+    SimpleITK array extraction returns data ordered as ``[D, H, W]``. The array
+    is transposed back to the pipeline convention ``[H, W, D]``.
+
+    Parameters
+    ----------
+    image : Any
+        SimpleITK image.
+
+    Returns
+    -------
+    tensor : torch.Tensor
+        Tensor with shape ``[H, W, D]``.
+    """
+
+    arr = sitk.GetArrayFromImage(image)
+    arr = np.transpose(arr, (1, 2, 0))
+    return torch.as_tensor(arr)
+
+
+def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: float) -> Any:
+    """
+    Smooth and downsample an image for multiscale demons registration.
+
+    The image is smoothed in physical units before downsampling, matching the
+    multiscale registration strategy used by the DDF workflow. The output
+    preserves the original origin and direction while adjusting spacing for the
+    lower-resolution grid.
+
+    Parameters
+    ----------
+    image : Any
+        SimpleITK image to smooth and resample.
+
+    shrink_factor : float
+        Factor by which each image dimension is reduced.
+
+    smoothing_sigma : float
+        Gaussian smoothing sigma in physical units.
+
+    Returns
+    -------
+    image : Any
+        Smoothed and resampled SimpleITK image.
+    """
+
+    smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)
+
+    original_spacing = image.GetSpacing()
+    original_size = image.GetSize()
+    new_size = [max(2, int(sz / shrink_factor + 0.5)) for sz in original_size]
+    new_spacing = [
+        ((original_sz - 1) * original_spc) / (new_sz - 1)
+        for original_sz, original_spc, new_sz in zip(original_size, original_spacing, new_size, strict=True)
+    ]
+
+    return sitk.Resample(
+        smoothed_image,
+        new_size,
+        sitk.Transform(),
+        sitk.sitkLinear,
+        image.GetOrigin(),
+        new_spacing,
+        image.GetDirection(),
+        0.0,
+        image.GetPixelID(),
+    )
+
+
+def _multiscale_demons(
+    registration_algorithm: Any,
+    fixed_image: Any,
+    moving_image: Any,
+    initial_transform: Any,
+    shrink_factors: list[float],
+    smoothing_sigmas: list[float],
+) -> Any:
+    """
+    Run demons registration from coarse to full resolution.
+
+    This helper builds a fixed/moving image pyramid, initializes a displacement
+    field on the coarsest level, and refines it from coarse levels back to the
+    original image grid.
+
+    Parameters
+    ----------
+    registration_algorithm : Any
+        SimpleITK demons registration filter with an ``Execute`` method.
+
+    fixed_image : Any
+        SimpleITK fixed image defining the output spatial domain.
+
+    moving_image : Any
+        SimpleITK moving image that is registered into fixed-image space.
+
+    initial_transform : Any
+        SimpleITK transform used to initialize the displacement field.
+
+    shrink_factors : list[float]
+        Pyramid shrink factors, ordered from coarse to fine in configuration
+        style. The original resolution is handled implicitly.
+
+    smoothing_sigmas : list[float]
+        Gaussian smoothing sigmas for each shrink factor.
+
+    Returns
+    -------
+    transform : Any
+        SimpleITK displacement-field transform mapping fixed-image points to
+        moving-image points for resampling into fixed-image space.
+    """
+
+    fixed_images = [fixed_image]
+    moving_images = [moving_image]
+
+    for shrink_factor, smoothing_sigma in reversed(list(zip(shrink_factors, smoothing_sigmas, strict=True))):
+        fixed_images.append(_smooth_and_resample(fixed_images[0], shrink_factor, smoothing_sigma))
+        moving_images.append(_smooth_and_resample(moving_images[0], shrink_factor, smoothing_sigma))
+
+    displacement_field = sitk.TransformToDisplacementField(
+        initial_transform,
+        sitk.sitkVectorFloat64,
+        fixed_images[-1].GetSize(),
+        fixed_images[-1].GetOrigin(),
+        fixed_images[-1].GetSpacing(),
+        fixed_images[-1].GetDirection(),
+    )
+    displacement_field = registration_algorithm.Execute(fixed_images[-1], moving_images[-1], displacement_field)
+
+    for fixed_level, moving_level in reversed(list(zip(fixed_images[0:-1], moving_images[0:-1], strict=True))):
+        displacement_field = sitk.Resample(displacement_field, fixed_level)
+        displacement_field = registration_algorithm.Execute(fixed_level, moving_level, displacement_field)
+
+    return sitk.DisplacementFieldTransform(displacement_field)
