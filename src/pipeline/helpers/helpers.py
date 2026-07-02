@@ -709,9 +709,9 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     arr = tensor.detach().cpu().numpy()
     arr = np.transpose(arr, (2, 0, 1))
     image = sitk.GetImageFromArray(arr.astype(np.float32 if pixel_id == sitk.sitkFloat32 else np.uint8))
-    image.SetSpacing((config.spacing[2], config.spacing[1], config.spacing[0]))
-    image.SetOrigin((0.0, 0.0, 0.0))
-    image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    image.SetSpacing((config.spacing[2], config.spacing[1], config.spacing[0]))  # type: ignore[no-untyped-call]
+    image.SetOrigin((0.0, 0.0, 0.0))  # type: ignore[no-untyped-call]
+    image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))  # type: ignore[no-untyped-call]
     return image
 
 
@@ -764,7 +764,7 @@ def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: floa
         Smoothed and resampled SimpleITK image.
     """
 
-    smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)
+    smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)  # type: ignore[no-untyped-call]
 
     original_spacing = image.GetSpacing()
     original_size = image.GetSize()
@@ -777,7 +777,7 @@ def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: floa
     return sitk.Resample(
         smoothed_image,
         new_size,
-        sitk.Transform(),
+        sitk.Transform(),  # type: ignore[no-untyped-call]
         sitk.sitkLinear,
         image.GetOrigin(),
         new_spacing,
@@ -837,7 +837,7 @@ def _multiscale_demons(
         fixed_images.append(_smooth_and_resample(fixed_images[0], shrink_factor, smoothing_sigma))
         moving_images.append(_smooth_and_resample(moving_images[0], shrink_factor, smoothing_sigma))
 
-    displacement_field = sitk.TransformToDisplacementField(
+    displacement_field = sitk.TransformToDisplacementField(  # type: ignore[no-untyped-call]
         initial_transform,
         sitk.sitkVectorFloat64,
         fixed_images[-1].GetSize(),
@@ -851,4 +851,4 @@ def _multiscale_demons(
         displacement_field = sitk.Resample(displacement_field, fixed_level)
         displacement_field = registration_algorithm.Execute(fixed_level, moving_level, displacement_field)
 
-    return sitk.DisplacementFieldTransform(displacement_field)
+    return sitk.DisplacementFieldTransform(displacement_field)  # type: ignore[no-untyped-call]

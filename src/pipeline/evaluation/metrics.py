@@ -1,6 +1,7 @@
 import glob
 import itertools
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -332,4 +333,4 @@ def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
 
     model = lpips.LPIPS(net=config.lpips_net).to(config.device)
     model.eval()
-    return model
+    return cast(LPIPSModel, model)

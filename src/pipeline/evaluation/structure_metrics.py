@@ -226,10 +226,7 @@ def calculate_structure_similarity_metrics(
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("Structure metrics requested CUDA, but torch.cuda.is_available() is False")
 
-    print(
-        "Structure metric tensors use "
-        f"{device}; SimpleITK displacement registration and mask resampling run on CPU."
-    )
+    print(f"Structure metric tensors use {device}; SimpleITK displacement registration and mask resampling run on CPU.")
 
     for patient_id, gen_paths in tqdm(generated.items(), desc="Generated vs real structure metrics"):
         all_ref_paths = originals.get(patient_id, [])
@@ -443,15 +440,15 @@ def register_planning_ct_to_generated_ct(
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
     moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
 
-    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()
-    demons_filter.SetNumberOfIterations(config.structure_registration_iterations)
-    demons_filter.SetSmoothDisplacementField(True)
-    demons_filter.SetStandardDeviations(config.structure_registration_sigma)
+    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore[no-untyped-call]
+    demons_filter.SetNumberOfIterations(config.structure_registration_iterations)  # type: ignore[no-untyped-call]
+    demons_filter.SetSmoothDisplacementField(True)  # type: ignore[no-untyped-call]
+    demons_filter.SetStandardDeviations(config.structure_registration_sigma)  # type: ignore[no-untyped-call]
 
-    initial_transform = sitk.CenteredTransformInitializer(
+    initial_transform = sitk.CenteredTransformInitializer(  # type: ignore[no-untyped-call]
         fixed,
         moving,
-        sitk.Euler3DTransform(),
+        sitk.Euler3DTransform(),  # type: ignore[no-untyped-call]
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
     return _multiscale_demons(
@@ -500,11 +497,11 @@ def warp_planning_mask_to_generated_ct(
 
     moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
 
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetReferenceImage(fixed)
-    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
-    resampler.SetDefaultPixelValue(0)
-    resampler.SetTransform(transform)
-    warped = resampler.Execute(moving_mask)
+    resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
+    resampler.SetReferenceImage(fixed)  # type: ignore[no-untyped-call]
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
+    resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
+    resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
+    warped = resampler.Execute(moving_mask)  # type: ignore[no-untyped-call]
 
     return _sitk_image_to_tensor(warped) > 0
