@@ -1,25 +1,14 @@
 import glob
-import itertools
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import torch
-from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.evaluation.image_metrics import (
+    calculate_pairwise_variety_metrics,
     calculate_similarity_metrics,
-    lpips_3d,
-    mae_3d,
-    psnr_3d,
-    sob_3d,
-    ssim_3d,
 )
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.helpers import (
     _build_lpips_model,
-    _cache_patient_cts,
     _extract_patient_id,
 )
 
@@ -160,107 +149,6 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     return generated
 
 
-def calculate_pairwise_variety_metrics(
-    ct_groups: dict[str, list[Path]],
-    config: MaisiTestingConfig,
-    output_filename: str,
-) -> None:
-    """
-    Calculate pairwise variety metrics within groups of CT images.
-
-    This function compares all possible generated image pairs within each
-    patient group.
-
-    Metrics:
-    - MAE: lower means more similar voxel intensities
-    - SSIM: higher means more similar structure
-    - PSNR: higher means lower squared voxel-wise error
-    - SOB: lower means more similar edge structure
-    - LPIPS: higher usually means more visual/perceptual difference
-
-    Parameters
-    ----------
-    ct_groups : dict[str, list[Path]]
-        Dictionary mapping patient IDs to CT tensor paths.
-
-    config : MaisiTestingConfig
-        Configuration object containing evaluation settings.
-
-    output_filename : str
-        Name of the per-comparison output CSV file.
-
-    Raises
-    ------
-    ValueError
-        If `ct_groups` is empty.
-        If `output_filename` does not end with ".csv".
-        If `max_lpips_slices` is less than 1.
-        If the inputs are invalid. If no valid pairwise comparisons can be
-        calculated, the metric file is skipped.
-    """
-
-    if len(ct_groups) == 0:
-        raise ValueError("`ct_groups` cannot be empty")
-
-    device = torch.device(config.device)
-    lpips_model = _build_lpips_model(config)
-    rows = []
-
-    for patient_id, paths in tqdm(ct_groups.items(), desc="Generating pairwise variety metrics"):
-        if len(paths) < 2:
-            print(f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s).")
-            continue
-
-        patient_tensors = _cache_patient_cts(paths, config=config, device=device)
-
-        for path_a, path_b in itertools.combinations(paths, 2):
-            arr_a = patient_tensors[path_a]
-            arr_b = patient_tensors[path_b]
-            if arr_a.shape != arr_b.shape:
-                print(
-                    f"Skipping shape mismatch for {patient_id}: "
-                    f"{path_a.name} {tuple(arr_a.shape)} vs "
-                    f"{path_b.name} {tuple(arr_b.shape)}"
-                )
-                continue
-
-            row = {
-                "patient_id": patient_id,
-                "path_a": str(path_a),
-                "path_b": str(path_b),
-                "mae": mae_3d(arr_a, arr_b),
-                "ssim": ssim_3d(arr_a, arr_b, config.data_min, config.data_max),
-                "psnr": psnr_3d(arr_a, arr_b, config.data_min, config.data_max),
-                "sob": sob_3d(arr_a, arr_b),
-                "lpips": np.nan,
-            }
-
-            if config.use_lpips and lpips_model is not None:
-                row["lpips"] = lpips_3d(
-                    pred=arr_a,
-                    ref=arr_b,
-                    lpips_model=lpips_model,
-                    data_min=config.data_min,
-                    data_max=config.data_max,
-                    max_slices=config.max_lpips_slices,
-                )
-
-            rows.append(row)
-
-    if len(rows) == 0:
-        print("Skipping generated pairwise variety metrics: no valid pairwise comparisons were calculated")
-        return
-
-    df = pd.DataFrame(rows)
-    df.to_csv(config.metrics_dir / output_filename, index=False)
-
-    summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
-        ["mean", "std", "min", "max", "count"]
-    )
-    summary_name = output_filename.replace(".csv", "_summary.csv")
-    summary.to_csv(config.metrics_dir / summary_name)
-
-
 def evaluate_generated_cts(
     config: MaisiTestingConfig,
 ) -> None:
@@ -315,5 +203,4 @@ def evaluate_generated_cts(
     calculate_pairwise_variety_metrics(
         ct_groups=generated,
         config=config,
-        output_filename="generated_pairwise_variety_metrics.csv",
     )
