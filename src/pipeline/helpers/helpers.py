@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import SimpleITK as sitk
@@ -7,6 +7,50 @@ import torch
 import torch.nn.functional as F
 
 from src.pipeline.config import MaisiTestingConfig
+
+
+class LPIPSModel(Protocol):
+    """Callable interface implemented by LPIPS model instances."""
+
+    def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
+
+
+def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
+    """
+    Build the LPIPS model requested by the pipeline configuration.
+
+    LPIPS is an optional dependency used only when perceptual metrics are
+    enabled. If LPIPS is disabled in the configuration, this function returns
+    ``None`` without importing the package. If the package is unavailable, the
+    function disables LPIPS on the provided configuration object and returns
+    ``None`` so the rest of evaluation can continue.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing LPIPS settings, including
+        ``use_lpips``, ``lpips_net``, and ``device``.
+
+    Returns
+    -------
+    lpips_model : LPIPSModel | None
+        Initialized LPIPS model in evaluation mode, or ``None`` when LPIPS is
+        disabled or unavailable.
+    """
+
+    if not config.use_lpips:
+        return None
+
+    try:
+        import lpips  # type: ignore[import-untyped]
+    except ImportError:
+        print("LPIPS package not installed. Skipping LPIPS")
+        config.use_lpips = False
+        return None
+
+    model = lpips.LPIPS(net=config.lpips_net).to(config.device)
+    model.eval()
+    return cast(LPIPSModel, model)
 
 
 def _is_planning_ct_path(path: str | Path) -> bool:

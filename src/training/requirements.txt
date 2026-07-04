@@ -46,7 +46,6 @@ PyYAML==6.0.3
 requests==2.34.2
 scipy==1.17.1
 sentry-sdk==2.61.1
-SimpleITK==2.5.3
 smmap==5.0.3
 sympy==1.14.0
 torch==2.11.0+cu128

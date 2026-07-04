@@ -48,11 +48,24 @@ class MaisiTestingConfig:
     ct_root : Path
         Directory containing patient CT folders.
 
+    structures_root : Path
+        Directory containing patient structure-label folders used for
+        structure-based evaluation metrics.
+
     data_dict_path : Path
         Path to the dataset split JSON file.
 
     output_root : Path
         Root directory for all pipeline outputs.
+
+    evaluation_split : Literal["test", "val"]
+        Dataset split evaluated by the pipeline. When set to ``"val"``,
+        default split-specific output directories are redirected from
+        ``test`` to ``val``.
+
+    validation_fold : int
+        Validation fold index used when selecting validation patients from
+        the dataset split JSON.
 
     processed_ct_dir : Path
         Directory containing preprocessed CT data.
@@ -85,7 +98,7 @@ class MaisiTestingConfig:
         Number of rectified-flow sampling steps.
 
     latent_scale : float
-        Scaling factor applied to latent representations..
+        Scaling factor applied to latent representations.
 
     device : str
         Device used for model inference ("cuda" or "cpu").
@@ -126,6 +139,29 @@ class MaisiTestingConfig:
 
     max_lpips_slices : int
         Maximum number of slices to use for LPIPS calculation per volume.
+
+    use_structure_metrics : bool
+        Whether to calculate structure-based metrics during evaluation.
+
+    structure_labels : list[int]
+        Integer label values identifying the structures to include in
+        structure-based metrics.
+
+    structure_registration_iterations : int
+        Number of iterations used by the demons registration filter when
+        aligning fixed and generated CTs for structure evaluation.
+
+    structure_registration_sigma : float
+        Gaussian smoothing standard deviation used by the demons registration
+        filter during structure evaluation.
+
+    structure_registration_shrink_factors : list[float]
+        Per-level shrink factors used for multiscale structure registration,
+        ordered from coarse to fine resolution.
+
+    structure_registration_smoothing_sigmas : list[float]
+        Per-level smoothing sigmas used for multiscale structure registration,
+        ordered from coarse to fine resolution.
 
     vae_config : dict | None
         VAE architecture configuration.

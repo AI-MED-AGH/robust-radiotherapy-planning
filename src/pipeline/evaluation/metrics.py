@@ -1,7 +1,6 @@
 import glob
 import itertools
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -10,7 +9,6 @@ from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.evaluation.image_metrics import (
-    LPIPSModel,
     calculate_similarity_metrics,
     lpips_3d,
     mae_3d,
@@ -20,6 +18,7 @@ from src.pipeline.evaluation.image_metrics import (
 )
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.helpers import (
+    _build_lpips_model,
     _cache_patient_cts,
     _extract_patient_id,
 )
@@ -207,7 +206,7 @@ def calculate_pairwise_variety_metrics(
     lpips_model = _build_lpips_model(config)
     rows = []
 
-    for patient_id, paths in tqdm(ct_groups.items(), desc="Generated pairwise variety metrics"):
+    for patient_id, paths in tqdm(ct_groups.items(), desc="Generating pairwise variety metrics"):
         if len(paths) < 2:
             print(f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s).")
             continue
@@ -318,19 +317,3 @@ def evaluate_generated_cts(
         config=config,
         output_filename="generated_pairwise_variety_metrics.csv",
     )
-
-
-def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
-    if not config.use_lpips:
-        return None
-
-    try:
-        import lpips  # type: ignore[import-untyped]
-    except ImportError:
-        print("LPIPS package not installed. Skipping LPIPS")
-        config.use_lpips = False
-        return None
-
-    model = lpips.LPIPS(net=config.lpips_net).to(config.device)
-    model.eval()
-    return cast(LPIPSModel, model)

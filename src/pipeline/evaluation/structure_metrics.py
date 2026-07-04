@@ -84,8 +84,8 @@ def hausdorff_distance(
     as HD95 for ``percentile=95``.
 
     Empty-mask convention:
-    - both masks empty -> 0.0
-    - only one mask empty -> positive infinity
+    - Both masks empty -> 0.0.
+    - Only one mask empty -> positive infinity.
 
     Parameters
     ----------

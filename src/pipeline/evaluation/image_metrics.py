@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
+    LPIPSModel,
     _as_metric_tensor,
     _cache_patient_cts,
     _evenly_spaced_slices_for_lpips,
@@ -17,10 +18,6 @@ from src.pipeline.helpers.helpers import (
     _resolve_metric_device,
     _validate_3d_pair,
 )
-
-
-class LPIPSModel(Protocol):
-    def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
 def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
@@ -64,10 +61,9 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
     """
     Calculate the mean Structural Similarity Index (SSIM) for two 3D images.
 
-    This function computes SSIM slice-by-slice along the z-axis and returns
-    the average score across all slices. It is intended for comparing
-    volumetric medical images such as CT scans while using the standard
-    2D SSIM implementation.
+    This function computes SSIM directly on the full 3D volume using MONAI's
+    regression metric implementation. It is intended for comparing volumetric
+    medical images such as CT scans.
 
     Parameters
     ----------
@@ -77,17 +73,17 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
     ref : torch.Tensor | np.ndarray
         Reference (ground-truth) 3D image.
 
+    data_min : float
+        Minimum value allowed for the data.
+
+    data_max : float
+        Maximum value allowed for the data.
+
     Returns
     -------
     score : float
-        Mean SSIM score averaged across all z-axis slices.
-        Values closer to 1 indicate higher structural similarity.
-
-    data_min: float
-        Minimum value allowed for the data.
-
-    data_max: float
-        Maximum value allowed for the data.
+        Mean 3D SSIM score. Values closer to 1 indicate higher structural
+        similarity.
 
     Raises
     ------
@@ -162,10 +158,10 @@ def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
     ref : torch.Tensor | np.ndarray
         Reference 3D image.
 
-    data_min: float
+    data_min : float
         Minimum value allowed for the data.
 
-    data_max: float
+    data_max : float
         Maximum value allowed for the data.
 
     Returns
@@ -347,10 +343,10 @@ def lpips_3d(
     ref : torch.Tensor | np.ndarray
         Reference 3D CT array normalized to [data_min, data_max].
 
-    data_min: float
+    data_min : float
         Minimum value allowed for the data.
 
-    data_max: float
+    data_max : float
         Maximum value allowed for the data.
 
     max_slices : int
@@ -430,13 +426,24 @@ def calculate_similarity_metrics(
 
     Parameters
     ----------
+    generated : dict[str, list[Path]]
+        Generated CT tensor paths grouped by patient ID.
+
+    originals : dict[str, list[Path]]
+        Original/reference CT tensor paths grouped by patient ID. Planning CTs
+        are excluded before generated-vs-real comparisons are calculated.
+
     config : MaisiTestingConfig
         Configuration object containing evaluation settings and directory paths.
+
+    lpips_model : LPIPSModel | None, optional
+        Optional initialized LPIPS model. If ``None``, LPIPS values are left as
+        NaN even when ``config.use_lpips`` is enabled.
 
     Raises
     ------
     ValueError
-        If no valid comparisons can be calculated.
+        If no valid generated-vs-real comparisons can be calculated.
     """
 
     device = torch.device(config.device)
