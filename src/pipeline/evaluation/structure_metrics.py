@@ -226,6 +226,135 @@ def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Te
     return label.round().to(torch.int16)
 
 
+def label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
+    """
+    Extract a binary structure mask from a label map.
+
+    Label 0 is treated as an aggregate foreground request and returns all
+    non-zero labels. Positive labels return only that exact label value.
+
+    Parameters
+    ----------
+    label_map : torch.Tensor
+        3D integer structure label map.
+
+    label : int
+        Structure label to extract. Use 0 for any non-background structure.
+
+    Returns
+    -------
+    mask : torch.Tensor
+        Boolean 3D mask for the requested structure.
+    """
+
+    if label <= 0:
+        return label_map != 0
+
+    return label_map == label
+
+
+def register_planning_ct_to_generated_ct(
+    planning_ct: torch.Tensor,
+    generated_ct: torch.Tensor,
+    config: MaisiTestingConfig,
+) -> Any:
+    """
+    Register a planning CT to a generated CT.
+
+    The generated CT is used as the fixed image and the planning CT as the
+    moving image. The returned SimpleITK transform maps planning CT space into
+    generated CT space, so it can be reused to warp every selected planning
+    structure label for the same generated CT.
+
+    Parameters
+    ----------
+    planning_ct : torch.Tensor
+        Planning CT in HU-like units.
+
+    generated_ct : torch.Tensor
+        Generated CT in HU-like units.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing spacing and demons-registration
+        settings.
+
+    Returns
+    -------
+    transform : Any
+        SimpleITK displacement-field transform from planning CT space to
+        generated CT space.
+    """
+
+    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
+    moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
+
+    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore[no-untyped-call]
+    demons_filter.SetNumberOfIterations(config.structure_registration_iterations)  # type: ignore[no-untyped-call]
+    demons_filter.SetSmoothDisplacementField(True)  # type: ignore[no-untyped-call]
+    demons_filter.SetStandardDeviations(config.structure_registration_sigma)  # type: ignore[no-untyped-call]
+
+    initial_transform = sitk.CenteredTransformInitializer(  # type: ignore[no-untyped-call]
+        fixed,
+        moving,
+        sitk.Euler3DTransform(),  # type: ignore[no-untyped-call]
+        sitk.CenteredTransformInitializerFilter.GEOMETRY,
+    )
+    return _multiscale_demons(
+        registration_algorithm=demons_filter,
+        fixed_image=fixed,
+        moving_image=moving,
+        initial_transform=initial_transform,
+        shrink_factors=config.structure_registration_shrink_factors,
+        smoothing_sigmas=config.structure_registration_smoothing_sigmas,
+    )
+
+
+def warp_planning_mask_to_generated_ct(
+    planning_mask: torch.Tensor,
+    generated_ct: torch.Tensor,
+    transform: Any,
+    config: MaisiTestingConfig,
+) -> torch.Tensor:
+    """
+    Warp a planning structure mask into generated CT space.
+
+    Nearest-neighbor interpolation is used to preserve the binary mask labels.
+
+    Parameters
+    ----------
+    planning_mask : torch.Tensor
+        Boolean or binary 3D structure mask in planning CT space.
+
+    generated_ct : torch.Tensor
+        Generated CT tensor used as the resampling reference grid.
+
+    transform : Any
+        SimpleITK transform returned by
+        ``register_planning_ct_to_generated_ct``.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing spacing and image-grid settings.
+
+    Returns
+    -------
+    warped_mask : torch.Tensor
+        Boolean 3D mask in generated CT space.
+    """
+
+    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
+
+    moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
+
+    resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
+    resampler.SetReferenceImage(fixed)  # type: ignore[no-untyped-call]
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
+    resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
+    resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
+    warped = resampler.Execute(moving_mask)  # type: ignore[no-untyped-call]
+
+    return _sitk_image_to_tensor(warped) > 0
+
+
 def calculate_structure_similarity_metrics(
     generated: dict[str, list[Path]],
     originals: dict[str, list[Path]],
@@ -377,132 +506,3 @@ def calculate_structure_similarity_metrics(
         ["mean", "std", "min", "max", "count"]
     )
     summary.to_csv(config.metrics_dir / "generated_vs_real_structure_summary.csv")
-
-
-def label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
-    """
-    Extract a binary structure mask from a label map.
-
-    Label 0 is treated as an aggregate foreground request and returns all
-    non-zero labels. Positive labels return only that exact label value.
-
-    Parameters
-    ----------
-    label_map : torch.Tensor
-        3D integer structure label map.
-
-    label : int
-        Structure label to extract. Use 0 for any non-background structure.
-
-    Returns
-    -------
-    mask : torch.Tensor
-        Boolean 3D mask for the requested structure.
-    """
-
-    if label <= 0:
-        return label_map != 0
-
-    return label_map == label
-
-
-def register_planning_ct_to_generated_ct(
-    planning_ct: torch.Tensor,
-    generated_ct: torch.Tensor,
-    config: MaisiTestingConfig,
-) -> Any:
-    """
-    Register a planning CT to a generated CT.
-
-    The generated CT is used as the fixed image and the planning CT as the
-    moving image. The returned SimpleITK transform maps planning CT space into
-    generated CT space, so it can be reused to warp every selected planning
-    structure label for the same generated CT.
-
-    Parameters
-    ----------
-    planning_ct : torch.Tensor
-        Planning CT in HU-like units.
-
-    generated_ct : torch.Tensor
-        Generated CT in HU-like units.
-
-    config : MaisiTestingConfig
-        Pipeline configuration containing spacing and demons-registration
-        settings.
-
-    Returns
-    -------
-    transform : Any
-        SimpleITK displacement-field transform from planning CT space to
-        generated CT space.
-    """
-
-    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
-    moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
-
-    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore[no-untyped-call]
-    demons_filter.SetNumberOfIterations(config.structure_registration_iterations)  # type: ignore[no-untyped-call]
-    demons_filter.SetSmoothDisplacementField(True)  # type: ignore[no-untyped-call]
-    demons_filter.SetStandardDeviations(config.structure_registration_sigma)  # type: ignore[no-untyped-call]
-
-    initial_transform = sitk.CenteredTransformInitializer(  # type: ignore[no-untyped-call]
-        fixed,
-        moving,
-        sitk.Euler3DTransform(),  # type: ignore[no-untyped-call]
-        sitk.CenteredTransformInitializerFilter.GEOMETRY,
-    )
-    return _multiscale_demons(
-        registration_algorithm=demons_filter,
-        fixed_image=fixed,
-        moving_image=moving,
-        initial_transform=initial_transform,
-        shrink_factors=config.structure_registration_shrink_factors,
-        smoothing_sigmas=config.structure_registration_smoothing_sigmas,
-    )
-
-
-def warp_planning_mask_to_generated_ct(
-    planning_mask: torch.Tensor,
-    generated_ct: torch.Tensor,
-    transform: Any,
-    config: MaisiTestingConfig,
-) -> torch.Tensor:
-    """
-    Warp a planning structure mask into generated CT space.
-
-    Nearest-neighbor interpolation is used to preserve the binary mask labels.
-
-    Parameters
-    ----------
-    planning_mask : torch.Tensor
-        Boolean or binary 3D structure mask in planning CT space.
-
-    generated_ct : torch.Tensor
-        Generated CT tensor used as the resampling reference grid.
-
-    transform : Any
-        SimpleITK transform returned by
-        ``register_planning_ct_to_generated_ct``.
-
-    config : MaisiTestingConfig
-        Pipeline configuration containing spacing and image-grid settings.
-
-    Returns
-    -------
-    warped_mask : torch.Tensor
-        Boolean 3D mask in generated CT space.
-    """
-
-    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
-
-    moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
-
-    resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
-    resampler.SetReferenceImage(fixed)  # type: ignore[no-untyped-call]
-    resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
-    resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
-    resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
-    warped = resampler.Execute(moving_mask)  # type: ignore[no-untyped-call]
-
-    return _sitk_image_to_tensor(warped) > 0
