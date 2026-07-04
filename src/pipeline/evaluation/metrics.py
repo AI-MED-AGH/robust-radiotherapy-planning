@@ -9,6 +9,7 @@ from src.pipeline.evaluation.image_metrics import (
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.helpers import (
     _build_lpips_model,
+    _clean_pipeline_memory,
     _extract_patient_id,
 )
 
@@ -193,14 +194,17 @@ def evaluate_generated_cts(
         config=config,
         lpips_model=_build_lpips_model(config),
     )
+    _clean_pipeline_memory()
 
     calculate_structure_similarity_metrics(
         generated=generated,
         originals=originals,
         config=config,
     )
+    _clean_pipeline_memory()
 
     calculate_pairwise_variety_metrics(
         ct_groups=generated,
         config=config,
     )
+    _clean_pipeline_memory()

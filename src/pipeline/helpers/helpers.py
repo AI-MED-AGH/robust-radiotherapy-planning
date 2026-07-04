@@ -1,3 +1,4 @@
+import gc
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -20,6 +21,27 @@ DemonsRegistrationAlgorithm = (
     | sitk.DiffeomorphicDemonsRegistrationFilter
     | sitk.FastSymmetricForcesDemonsRegistrationFilter
 )
+
+
+def _clean_pipeline_memory() -> None:
+    """
+    Release Python garbage and cached CUDA memory between heavy pipeline stages.
+
+    This helper is intended for use after memory-intensive pipeline stages,
+    such as latent encoding, CT generation, and metric calculation. It first
+    asks Python to collect unreachable objects, then releases cached CUDA
+    allocator blocks back to PyTorch so later stages can reuse GPU memory.
+
+    The CUDA cache call is safe to execute even when CUDA is unavailable.
+
+    Returns
+    -------
+    None
+        This function is called only for its memory-management side effects.
+    """
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:

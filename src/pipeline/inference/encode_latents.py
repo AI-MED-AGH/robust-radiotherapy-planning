@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from src.data_utils import LoadProcessedTensord, sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.helpers import _clean_pipeline_memory
 
 
 def load_vae_model(
@@ -249,3 +250,6 @@ def encode_latents(config: MaisiTestingConfig) -> None:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
             torch.save(encoded_ct[0, ...].cpu(), save_path)
+
+    del encoded_ct, loader
+    _clean_pipeline_memory()
