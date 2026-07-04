@@ -409,8 +409,11 @@ def calculate_structure_similarity_metrics(
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("Structure metrics requested CUDA, but torch.cuda.is_available() is False")
 
-    #To add logging if needed
-    #print(f"Structure metric tensors use {device}; SimpleITK displacement registration and mask resampling run on CPU.")
+    # To add logging if needed
+    # print(
+    #     f"Structure metric tensors use {device}; "
+    #     "SimpleITK displacement registration and mask resampling run on CPU."
+    # )
 
     for patient_id, gen_paths in tqdm(generated.items(), desc="Calculating generated vs real structure metrics"):
         all_ref_paths = originals.get(patient_id, [])
