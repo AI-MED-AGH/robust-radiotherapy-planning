@@ -15,6 +15,13 @@ class LPIPSModel(Protocol):
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor: ...
 
 
+DemonsRegistrationAlgorithm = (
+    sitk.DemonsRegistrationFilter
+    | sitk.DiffeomorphicDemonsRegistrationFilter
+    | sitk.FastSymmetricForcesDemonsRegistrationFilter
+)
+
+
 def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
     """
     Build the LPIPS model requested by the pipeline configuration.
@@ -723,7 +730,7 @@ def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
     return config.structures_root / patient_id / structure_name
 
 
-def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: Any) -> Any:
+def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:
     """
     Convert a pipeline tensor to a SimpleITK image.
 
@@ -740,13 +747,13 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     config : MaisiTestingConfig
         Pipeline configuration containing voxel spacing.
 
-    pixel_id : Any
+    pixel_id : int
         SimpleITK pixel type, usually ``sitk.sitkFloat32`` for CT images or
         ``sitk.sitkUInt8`` for masks.
 
     Returns
     -------
-    image : Any
+    image : sitk.Image
         SimpleITK image with spacing and identity physical metadata assigned.
     """
 
@@ -759,7 +766,7 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     return image
 
 
-def _sitk_image_to_tensor(image: Any) -> torch.Tensor:
+def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     """
     Convert a SimpleITK image back to a pipeline tensor.
 
@@ -768,7 +775,7 @@ def _sitk_image_to_tensor(image: Any) -> torch.Tensor:
 
     Parameters
     ----------
-    image : Any
+    image : sitk.Image
         SimpleITK image.
 
     Returns
@@ -782,7 +789,7 @@ def _sitk_image_to_tensor(image: Any) -> torch.Tensor:
     return torch.as_tensor(arr)
 
 
-def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: float) -> Any:
+def _smooth_and_resample(image: sitk.Image, shrink_factor: float, smoothing_sigma: float) -> sitk.Image:
     """
     Smooth and downsample an image for multiscale demons registration.
 
@@ -793,7 +800,7 @@ def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: floa
 
     Parameters
     ----------
-    image : Any
+    image : sitk.Image
         SimpleITK image to smooth and resample.
 
     shrink_factor : float
@@ -804,14 +811,14 @@ def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: floa
 
     Returns
     -------
-    image : Any
+    image : sitk.Image
         Smoothed and resampled SimpleITK image.
     """
 
     smoothed_image = sitk.SmoothingRecursiveGaussian(image, smoothing_sigma)  # type: ignore[no-untyped-call]
 
-    original_spacing = image.GetSpacing()
-    original_size = image.GetSize()
+    original_spacing = image.GetSpacing()  # type: ignore[no-untyped-call]
+    original_size = image.GetSize()  # type: ignore[no-untyped-call]
     new_size = [max(2, int(sz / shrink_factor + 0.5)) for sz in original_size]
     new_spacing = [
         ((original_sz - 1) * original_spc) / (new_sz - 1)
@@ -823,22 +830,22 @@ def _smooth_and_resample(image: Any, shrink_factor: float, smoothing_sigma: floa
         new_size,
         sitk.Transform(),  # type: ignore[no-untyped-call]
         sitk.sitkLinear,
-        image.GetOrigin(),
+        image.GetOrigin(),  # type: ignore[no-untyped-call]
         new_spacing,
-        image.GetDirection(),
+        image.GetDirection(),  # type: ignore[no-untyped-call]
         0.0,
-        image.GetPixelID(),
+        image.GetPixelID(),  # type: ignore[no-untyped-call]
     )
 
 
 def _multiscale_demons(
-    registration_algorithm: Any,
-    fixed_image: Any,
-    moving_image: Any,
-    initial_transform: Any,
+    registration_algorithm: DemonsRegistrationAlgorithm,
+    fixed_image: sitk.Image,
+    moving_image: sitk.Image,
+    initial_transform: sitk.Transform,
     shrink_factors: list[float],
     smoothing_sigmas: list[float],
-) -> Any:
+) -> sitk.DisplacementFieldTransform:
     """
     Run demons registration from coarse to full resolution.
 
@@ -848,16 +855,16 @@ def _multiscale_demons(
 
     Parameters
     ----------
-    registration_algorithm : Any
+    registration_algorithm : DemonsRegistrationAlgorithm
         SimpleITK demons registration filter with an ``Execute`` method.
 
-    fixed_image : Any
+    fixed_image : sitk.Image
         SimpleITK fixed image defining the output spatial domain.
 
-    moving_image : Any
+    moving_image : sitk.Image
         SimpleITK moving image that is registered into fixed-image space.
 
-    initial_transform : Any
+    initial_transform : sitk.Transform
         SimpleITK transform used to initialize the displacement field.
 
     shrink_factors : list[float]
@@ -869,7 +876,7 @@ def _multiscale_demons(
 
     Returns
     -------
-    transform : Any
+    transform : sitk.DisplacementFieldTransform
         SimpleITK displacement-field transform mapping fixed-image points to
         moving-image points for resampling into fixed-image space.
     """
@@ -884,15 +891,23 @@ def _multiscale_demons(
     displacement_field = sitk.TransformToDisplacementField(  # type: ignore[no-untyped-call]
         initial_transform,
         sitk.sitkVectorFloat64,
-        fixed_images[-1].GetSize(),
-        fixed_images[-1].GetOrigin(),
-        fixed_images[-1].GetSpacing(),
-        fixed_images[-1].GetDirection(),
+        fixed_images[-1].GetSize(),  # type: ignore[no-untyped-call]
+        fixed_images[-1].GetOrigin(),  # type: ignore[no-untyped-call]
+        fixed_images[-1].GetSpacing(),  # type: ignore[no-untyped-call]
+        fixed_images[-1].GetDirection(),  # type: ignore[no-untyped-call]
     )
-    displacement_field = registration_algorithm.Execute(fixed_images[-1], moving_images[-1], displacement_field)
+    displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
+        fixed_images[-1],
+        moving_images[-1],
+        displacement_field,
+    )
 
     for fixed_level, moving_level in reversed(list(zip(fixed_images[0:-1], moving_images[0:-1], strict=True))):
         displacement_field = sitk.Resample(displacement_field, fixed_level)
-        displacement_field = registration_algorithm.Execute(fixed_level, moving_level, displacement_field)
+        displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
+            fixed_level,
+            moving_level,
+            displacement_field,
+        )
 
     return sitk.DisplacementFieldTransform(displacement_field)  # type: ignore[no-untyped-call]

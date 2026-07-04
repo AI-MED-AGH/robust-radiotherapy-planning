@@ -1,10 +1,11 @@
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 import torch
+from monai.data.meta_tensor import MetaTensor
 from monai.transforms import (  # type: ignore[attr-defined]
     CenterSpatialCropd,
     Compose,
@@ -178,6 +179,53 @@ def hd95(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, spacin
     return hausdorff_distance(pred, ref, spacing=spacing, percentile=95.0)
 
 
+def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Tensor:
+    """
+    Load and preprocess a structure label map to the pipeline target grid.
+
+    The transform mirrors the CT preprocessing geometry: load image, enforce
+    channel-first format, reorient to RAS, pad/crop to the configured target
+    image size, and return an integer label tensor.
+
+    Parameters
+    ----------
+    path : Path
+        Path to a structure label-map NIfTI file.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing target image size and transform
+        settings.
+
+    Returns
+    -------
+    label_map : torch.Tensor
+        Integer 3D label map on CPU with shape matching
+        ``config.target_image_size``.
+    """
+
+    transform = Compose(
+        [
+            LoadImaged(keys="label"),
+            EnsureChannelFirstd(keys="label"),
+            Orientationd(keys="label", axcodes="RAS", labels=None),
+            SpatialPadd(
+                keys="label",
+                spatial_size=config.target_image_size,
+                mode="constant",
+                constant_values=0,
+            ),
+            CenterSpatialCropd(keys="label", roi_size=config.target_image_size),
+            EnsureTyped(keys="label", dtype=torch.int16),
+        ]
+    )
+
+    transformed = transform({"label": str(path)})
+    label_meta: MetaTensor = transformed["label"]
+    label = label_meta.as_tensor().detach().cpu()[0]
+
+    return label.round().to(torch.int16)
+
+
 def calculate_structure_similarity_metrics(
     generated: dict[str, list[Path]],
     originals: dict[str, list[Path]],
@@ -216,6 +264,12 @@ def calculate_structure_similarity_metrics(
     config : MaisiTestingConfig
         Pipeline configuration containing structure labels, spacing,
         registration settings, and output paths.
+
+    Raises
+    ------
+    RuntimeError
+        If structure metrics are configured to run tensor operations on CUDA
+        but CUDA is not available.
     """
 
     if not config.use_structure_metrics:
@@ -228,7 +282,7 @@ def calculate_structure_similarity_metrics(
 
     print(f"Structure metric tensors use {device}; SimpleITK displacement registration and mask resampling run on CPU.")
 
-    for patient_id, gen_paths in tqdm(generated.items(), desc="Generated vs real structure metrics"):
+    for patient_id, gen_paths in tqdm(generated.items(), desc="Calculating generated vs real structure metrics."):
         all_ref_paths = originals.get(patient_id, [])
         ref_paths = [path for path in all_ref_paths if not _is_planning_ct_path(path)]
         planning_paths = [path for path in all_ref_paths if _is_planning_ct_path(path)]
@@ -323,59 +377,6 @@ def calculate_structure_similarity_metrics(
         ["mean", "std", "min", "max", "count"]
     )
     summary.to_csv(config.metrics_dir / "generated_vs_real_structure_summary.csv")
-
-
-def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Tensor:
-    """
-    Load and preprocess a structure label map to the pipeline target grid.
-
-    The transform mirrors the CT preprocessing geometry: load image, enforce
-    channel-first format, reorient to RAS, pad/crop to the configured target
-    image size, and return an integer label tensor.
-
-    Parameters
-    ----------
-    path : Path
-        Path to a structure label-map NIfTI file.
-
-    config : MaisiTestingConfig
-        Pipeline configuration containing target image size and transform
-        settings.
-
-    Returns
-    -------
-    label_map : torch.Tensor
-        Integer 3D label map on CPU with shape matching
-        ``config.target_image_size``.
-    """
-
-    transform = Compose(
-        [
-            LoadImaged(keys="label"),
-            EnsureChannelFirstd(keys="label"),
-            Orientationd(keys="label", axcodes="RAS", labels=None),
-            SpatialPadd(
-                keys="label",
-                spatial_size=config.target_image_size,
-                mode="constant",
-                constant_values=0,
-            ),
-            CenterSpatialCropd(keys="label", roi_size=config.target_image_size),
-            EnsureTyped(keys="label", dtype=torch.int16),
-        ]
-    )
-
-    transformed = transform({"label": str(path)})
-    label = transformed["label"]
-
-    if hasattr(label, "as_tensor"):
-        label = label.as_tensor()
-
-    label = cast(torch.Tensor, label).detach().cpu()
-    if label.ndim == 4:
-        label = label[0]
-
-    return label.round().to(torch.int16)
 
 
 def label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
