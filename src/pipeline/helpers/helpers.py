@@ -918,9 +918,7 @@ def _multiscale_demons(
         moving_level = moving_image
         remaining_levels = []
 
-    # Demons filters require vector float64 displacement fields. The initial
-    # transform is rasterized on the coarsest fixed-image grid, then refined and
-    # resampled onto each progressively finer fixed-image grid.
+    # Demons filters require displacement fields with vector float64 pixels
     displacement_field = sitk.TransformToDisplacementField(  # type: ignore[no-untyped-call]
         initial_transform,
         sitk.sitkVectorFloat64,
@@ -929,6 +927,9 @@ def _multiscale_demons(
         fixed_level.GetSpacing(),  # type: ignore[no-untyped-call]
         fixed_level.GetDirection(),  # type: ignore[no-untyped-call]
     )
+
+    # Start registration on the coarsest grid so large deformations are found
+    # before the full-resolution details
     displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
         fixed_level,
         moving_level,
@@ -938,6 +939,8 @@ def _multiscale_demons(
     for shrink_factor, smoothing_sigma in remaining_levels:
         fixed_level = _smooth_and_resample(fixed_image, shrink_factor, smoothing_sigma)
         moving_level = _smooth_and_resample(moving_image, shrink_factor, smoothing_sigma)
+
+        # Carry the current DVF estimate onto the next finer fixed-image grid
         displacement_field = sitk.Resample(displacement_field, fixed_level)
         displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
             fixed_level,
@@ -945,6 +948,7 @@ def _multiscale_demons(
             displacement_field,
         )
 
+    # Finish with one refinement on the original fixed-image grid
     displacement_field = sitk.Resample(displacement_field, fixed_image)
     displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
         fixed_image,

@@ -128,7 +128,7 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
         raise ValueError(f"SSIM window is invalid for image shape {tuple(pred_t.shape)}")
 
     # MONAI expects [batch, channel, H, W, D]. The metric returns a tensor, so
-    # reduce explicitly to a Python float for CSV-friendly output.
+    # reduce explicitly to a Python float for CSV-friendly output
     metric = SSIMMetric(
         spatial_dims=3,
         data_range=data_max - data_min,
@@ -259,8 +259,7 @@ def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
     derivative = torch.tensor([-1.0, 0.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
     smoothing = torch.tensor([1.0, 2.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
 
-    # Build separable 3D Sobel kernels for x/y/z gradients, then apply all
-    # three filters in one conv3d call.
+    # Apply x/y/z Sobel filters together
     kernel_x = derivative[:, None, None] * smoothing[None, :, None] * smoothing[None, None, :]
     kernel_y = smoothing[:, None, None] * derivative[None, :, None] * smoothing[None, None, :]
     kernel_z = smoothing[:, None, None] * smoothing[None, :, None] * derivative[None, None, :]
@@ -391,8 +390,7 @@ def lpips_3d(
     if ref_t.min() < data_min or ref_t.max() > data_max:
         raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
-    # LPIPS is 2D, so sample a bounded number of slices instead of expanding
-    # the full 3D volume into a very large pseudo-batch.
+    # LPIPS is 2D, so compare a bounded slice sample
     pred_tensor = _evenly_spaced_slices_for_lpips(
         (pred_t - data_min) / (data_max - data_min),
         max_slices=max_slices,
@@ -459,6 +457,7 @@ def calculate_similarity_metrics(
 
     device = torch.device(config.device)
     rows = []
+    warnings: list[str] = []
 
     logger.info("Image similarity metrics will run on %s", device)
     for patient_id, gen_paths in tqdm(
@@ -469,16 +468,16 @@ def calculate_similarity_metrics(
         ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
 
         if len(all_ref_paths) == 0:
-            logger.warning("Skipping %s: no original/reference CT found", patient_id)
+            warnings.append(f"Skipping {patient_id}: no original/reference CT found")
             continue
 
         if len(ref_paths) == 0:
-            logger.warning("Skipping %s: no non-planning original/reference CT found", patient_id)
+            warnings.append(f"Skipping {patient_id}: no non-planning original/reference CT found")
             continue
 
         patient_paths = [*gen_paths, *ref_paths]
         # Image metrics reuse each generated/reference CT multiple times for a
-        # patient, so caching the patient tensors avoids repeated disk loads.
+        # patient, so caching the patient tensors avoids repeated disk loads
         patient_tensors = _cache_patient_cts(patient_paths, config=config, device=device)
 
         for gen_path in gen_paths:
@@ -487,13 +486,10 @@ def calculate_similarity_metrics(
                 ref_arr = patient_tensors[ref_path]
 
                 if gen_arr.shape != ref_arr.shape:
-                    logger.warning(
-                        "Skipping shape mismatch for %s: %s %s vs %s %s",
-                        patient_id,
-                        gen_path.name,
-                        tuple(gen_arr.shape),
-                        ref_path.name,
-                        tuple(ref_arr.shape),
+                    warnings.append(
+                        "Skipping shape mismatch for "
+                        f"{patient_id}: {gen_path.name} {tuple(gen_arr.shape)} vs "
+                        f"{ref_path.name} {tuple(ref_arr.shape)}"
                     )
                     continue
 
@@ -520,6 +516,9 @@ def calculate_similarity_metrics(
                     )
 
                 rows.append(row)
+
+    for message in warnings:
+        logger.warning(message)
 
     if len(rows) == 0:
         raise ValueError(
@@ -586,32 +585,28 @@ def calculate_pairwise_variety_metrics(
     if config.use_lpips and lpips_model is None:
         lpips_model = _build_lpips_model(config)
     rows = []
+    warnings: list[str] = []
 
     logger.info("Pairwise variety metrics will run on %s", device)
     for patient_id, paths in tqdm(ct_groups.items(), desc="Calculating pairwise variety metrics"):
         if len(paths) < 2:
-            logger.warning(
-                "Skipping pairwise generated variety metrics for %s: only %d image(s)",
-                patient_id,
-                len(paths),
+            warnings.append(
+                f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s)"
             )
             continue
 
         # Pairwise metrics compare every generated CT pair for a patient, so
-        # each tensor is loaded once and reused across all combinations.
+        # each tensor is loaded once and reused across all combinations
         patient_tensors = _cache_patient_cts(paths, config=config, device=device)
 
         for path_a, path_b in itertools.combinations(paths, 2):
             arr_a = patient_tensors[path_a]
             arr_b = patient_tensors[path_b]
             if arr_a.shape != arr_b.shape:
-                logger.warning(
-                    "Skipping shape mismatch for %s: %s %s vs %s %s",
-                    patient_id,
-                    path_a.name,
-                    tuple(arr_a.shape),
-                    path_b.name,
-                    tuple(arr_b.shape),
+                warnings.append(
+                    "Skipping shape mismatch for "
+                    f"{patient_id}: {path_a.name} {tuple(arr_a.shape)} vs "
+                    f"{path_b.name} {tuple(arr_b.shape)}"
                 )
                 continue
 
@@ -637,6 +632,9 @@ def calculate_pairwise_variety_metrics(
                 )
 
             rows.append(row)
+
+    for message in warnings:
+        logger.warning(message)
 
     if len(rows) == 0:
         logger.warning("Skipping generated pairwise variety metrics: no valid pairwise comparisons were calculated")

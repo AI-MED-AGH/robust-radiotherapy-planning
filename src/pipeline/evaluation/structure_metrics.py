@@ -21,6 +21,7 @@ from tqdm import tqdm
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     _as_binary_mask_pair,
+    _clean_pipeline_memory,
     _is_planning_ct_path,
     _load_hu_tensor,
     _multiscale_demons,
@@ -161,20 +162,19 @@ def _surface_distances(
 
     if pred_empty or ref_empty:
         return float("inf")
-
+    
+    # Hausdorff distance is defined on mask boundaries
     pred_surface = _surface_voxels(pred_t)
     ref_surface = _surface_voxels(ref_t)
 
-    # Work with surface coordinates rather than all foreground voxels. This is
-    # both the Hausdorff definition and much smaller than dense mask distances.
+    # Surface coordinates are much smaller than dense foreground coordinates
     pred_points = pred_surface.nonzero().float()
     ref_points = ref_surface.nonzero().float()
     spacing_t = torch.as_tensor(spacing, dtype=torch.float32, device=pred_points.device)
     pred_points = pred_points * spacing_t
     ref_points = ref_points * spacing_t
 
-    # Compute both directions so HD is symmetric. _nearest_distances batches
-    # cdist internally to avoid one huge [N_surface, M_surface] allocation.
+    # Use both directions so HD is symmetric
     distances = torch.cat(
         [
             _nearest_distances(pred_points, ref_points),
@@ -227,13 +227,13 @@ def hausdorff_and_hd95(
         If the masks have different shapes.
     """
 
+    # Surface extraction and nearest-neighbor distance search happen once
     distances = _surface_distances(pred, ref, spacing)
 
     if isinstance(distances, float):
         return distances, distances
 
-    # HD and HD95 share the same surface-distance tensor, avoiding a second
-    # surface extraction and nearest-neighbor pass for every mask comparison.
+    # Read HD and HD95 from the shared distance tensor
     return float(distances.max().item()), float(torch.quantile(distances, 0.95).item())
 
 
@@ -328,9 +328,8 @@ def register_planning_ct_to_generated_ct(
         points into planning/moving CT space for resampling.
     """
 
-    # SimpleITK registration runs on CPU. Callers keep CT tensors on CPU here
-    # so we do not reserve VRAM for volumes that are immediately converted to
-    # SimpleITK images.
+    # SimpleITK registration runs on CPU
+    # These conversions detach tensors from any accelerator residency
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
     moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
 
@@ -347,7 +346,7 @@ def register_planning_ct_to_generated_ct(
     )
 
     # The multiscale helper rasterizes the initial rigid transform into a DVF,
-    # then refines that field from coarse to full resolution.
+    # then refines that field from coarse to full resolution
     return _multiscale_demons(
         registration_algorithm=demons_filter,
         fixed_image=fixed,
@@ -394,7 +393,7 @@ def warp_planning_mask_to_generated_ct(
     """
 
     # The generated CT is used only as the reference grid: size, spacing,
-    # origin, and direction define where the warped planning mask is sampled.
+    # origin, and direction define where the warped planning mask is sampled
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
     moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
 
@@ -464,14 +463,15 @@ def calculate_structure_similarity_metrics(
     )
 
     rows: list[dict[str, Any]] = []
+    info_messages: list[str] = []
+    warnings: list[str] = []
     metric_device = torch.device(config.device)
     cpu_device = torch.device("cpu")
     if metric_device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("Structure metrics requested CUDA, but torch.cuda.is_available() is False")
 
-    # Structure label maps use the same geometry as preprocessed CTs, but their
-    # label-preserving transform is not saved by prepare_test_data. Build it
-    # once here and reuse it for every planning/reference structure file.
+    # Structure label maps use the same geometry as preprocessed CTs
+    # Build the label-preserving transform once for all structure files
     structure_transform = get_structure_label_transform(config)
 
     for patient_id, gen_paths in tqdm(generated.items(), desc="Calculating generated vs real structure metrics"):
@@ -480,18 +480,18 @@ def calculate_structure_similarity_metrics(
         planning_paths = [path for path in all_ref_paths if _is_planning_ct_path(path)]
 
         if len(ref_paths) == 0 or len(planning_paths) == 0:
-            logger.warning("Skipping structure metrics for %s: missing planning or non-planning CT", patient_id)
+            warnings.append(f"Skipping structure metrics for {patient_id}: missing planning or non-planning CT")
             continue
 
         planning_ct_path = planning_paths[0]
         planning_structure_path = _structure_path_for_ct(planning_ct_path, config)
 
         if not planning_structure_path.exists():
-            logger.warning("Skipping structure metrics for %s: missing %s", patient_id, planning_structure_path)
+            warnings.append(f"Skipping structure metrics for {patient_id}: missing {planning_structure_path}")
             continue
 
-        # Registration and mask warping go through SimpleITK, so keep CT
-        # volumes on CPU and avoid caching all patient CTs in CUDA memory.
+        # Registration and mask warping go through SimpleITK.
+        # Keep CT volumes on CPU instead of caching patient CTs in VRAM.
         planning_ct = _load_hu_tensor(planning_ct_path, config=config, device=cpu_device)
         planning_label_map = load_structure_label_map(planning_structure_path, structure_transform)
         planning_masks = {label: label_to_binary_mask(planning_label_map, label) for label in config.structure_labels}
@@ -500,7 +500,7 @@ def calculate_structure_similarity_metrics(
         for ref_path in ref_paths:
             ref_structure_path = _structure_path_for_ct(ref_path, config)
             if not ref_structure_path.exists():
-                logger.warning("Skipping missing reference structure for %s: %s", patient_id, ref_structure_path)
+                warnings.append(f"Skipping missing reference structure for {patient_id}: {ref_structure_path}")
                 continue
 
             ref_label_maps[ref_path] = load_structure_label_map(ref_structure_path, structure_transform)
@@ -512,18 +512,15 @@ def calculate_structure_similarity_metrics(
             gen_ct = _load_hu_tensor(gen_path, config=config, device=cpu_device)
 
             if gen_ct.shape != planning_ct.shape:
-                logger.warning(
-                    "Skipping structure registration for %s: %s %s vs planning %s",
-                    patient_id,
-                    gen_path.name,
-                    tuple(gen_ct.shape),
-                    tuple(planning_ct.shape),
+                warnings.append(
+                    "Skipping structure registration for "
+                    f"{patient_id}: {gen_path.name} {tuple(gen_ct.shape)} vs planning {tuple(planning_ct.shape)}"
                 )
                 del gen_ct
                 continue
 
             with torch.inference_mode():
-                logger.info("Generating structure DVF for %s: planning -> %s", patient_id, gen_path.name)
+                info_messages.append(f"Generated structure DVF for {patient_id}: planning -> {gen_path.name}")
                 transform = register_planning_ct_to_generated_ct(
                     planning_ct=planning_ct,
                     generated_ct=gen_ct,
@@ -533,7 +530,7 @@ def calculate_structure_similarity_metrics(
                 for label in config.structure_labels:
                     # Warp one planning label at a time. Only the current
                     # predicted/reference masks are moved to metric_device, so
-                    # CUDA sees small boolean masks rather than full CT caches.
+                    # CUDA sees small boolean masks rather than full CT caches
                     pred_mask = warp_planning_mask_to_generated_ct(
                         planning_mask=planning_masks[label],
                         generated_ct=gen_ct,
@@ -545,12 +542,9 @@ def calculate_structure_similarity_metrics(
                         ref_structure_path = _structure_path_for_ct(ref_path, config)
                         ref_mask = label_to_binary_mask(ref_label_map, label).to(metric_device)
                         if pred_mask.shape != ref_mask.shape:
-                            logger.warning(
-                                "Skipping structure shape mismatch for %s, label %s: %s vs %s",
-                                patient_id,
-                                label,
-                                tuple(pred_mask.shape),
-                                tuple(ref_mask.shape),
+                            warnings.append(
+                                "Skipping structure shape mismatch for "
+                                f"{patient_id}, label {label}: {tuple(pred_mask.shape)} vs {tuple(ref_mask.shape)}"
                             )
                             del ref_mask
                             continue
@@ -576,8 +570,13 @@ def calculate_structure_similarity_metrics(
                     del pred_mask
 
             del gen_ct, transform
-            if metric_device.type == "cuda":
-                torch.cuda.empty_cache()
+            _clean_pipeline_memory()
+
+    for message in info_messages:
+        logger.info(message)
+
+    for message in warnings:
+        logger.warning(message)
 
     if len(rows) == 0:
         logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
