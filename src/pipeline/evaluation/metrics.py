@@ -1,4 +1,5 @@
 import glob
+import logging
 from pathlib import Path
 
 from src.pipeline.config import MaisiTestingConfig
@@ -12,6 +13,8 @@ from src.pipeline.helpers.helpers import (
     _clean_pipeline_memory,
     _extract_patient_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
@@ -187,15 +190,25 @@ def evaluate_generated_cts(
 
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
+    lpips_model = _build_lpips_model(config)
 
+    logger.info(
+        "Starting evaluation: "
+        f"{sum(len(paths) for paths in generated.values())} generated CT(s), "
+        f"{sum(len(paths) for paths in originals.values())} original CT(s), "
+        f"metrics_dir={config.metrics_dir}"
+    )
+
+    logger.info("Calculating generated-vs-real image metrics")
     calculate_similarity_metrics(
         generated=generated,
         originals=originals,
         config=config,
-        lpips_model=_build_lpips_model(config),
+        lpips_model=lpips_model,
     )
     _clean_pipeline_memory()
 
+    logger.info("Calculating generated-vs-real structure metrics")
     calculate_structure_similarity_metrics(
         generated=generated,
         originals=originals,
@@ -203,8 +216,12 @@ def evaluate_generated_cts(
     )
     _clean_pipeline_memory()
 
+    logger.info("Calculating generated pairwise variety metrics")
     calculate_pairwise_variety_metrics(
         ct_groups=generated,
         config=config,
+        lpips_model=lpips_model,
     )
     _clean_pipeline_memory()
+
+    logger.info("Finished evaluation")

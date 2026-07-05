@@ -1,4 +1,5 @@
 import gc
+import logging
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -8,6 +9,8 @@ import torch
 import torch.nn.functional as F
 
 from src.pipeline.config import MaisiTestingConfig
+
+logger = logging.getLogger(__name__)
 
 
 class LPIPSModel(Protocol):
@@ -73,7 +76,7 @@ def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
     try:
         import lpips  # type: ignore[import-untyped]
     except ImportError:
-        print("LPIPS package not installed. Skipping LPIPS")
+        logger.warning("LPIPS package not installed. Skipping LPIPS")
         config.use_lpips = False
         return None
 
@@ -640,7 +643,7 @@ def _as_binary_mask_pair(
     Raises
     ------
     ValueError
-        If either mask is empty.
+        If either mask has zero elements.
         If either mask is not 3-dimensional.
         If the masks have different shapes.
     """
@@ -650,7 +653,7 @@ def _as_binary_mask_pair(
     ref_t = _as_metric_tensor(ref, device=device) > 0
 
     if pred_t.numel() == 0 or ref_t.numel() == 0:
-        raise ValueError("Masks cannot be empty")
+        raise ValueError("Masks cannot have zero elements")
 
     if pred_t.ndim != 3 or ref_t.ndim != 3:
         raise ValueError(f"Masks must be 3D. Got {tuple(pred_t.shape)} and {tuple(ref_t.shape)}")
@@ -690,7 +693,7 @@ def _surface_voxels(mask: torch.Tensor) -> torch.Tensor:
 def _nearest_distances(
     source_points: torch.Tensor,
     target_points: torch.Tensor,
-    batch_size: int = 4096,
+    batch_size: int = 512,
 ) -> torch.Tensor:
     """
     Calculate nearest-neighbor distances from source points to target points.
@@ -871,9 +874,10 @@ def _multiscale_demons(
     """
     Run demons registration from coarse to full resolution.
 
-    This helper builds a fixed/moving image pyramid, initializes a displacement
-    field on the coarsest level, and refines it from coarse levels back to the
-    original image grid.
+    This helper initializes a displacement field on the coarsest requested
+    level, then refines it toward the original image grid one level at a time.
+    It creates only the current fixed/moving pyramid images, rather than
+    keeping the full pyramid in memory.
 
     Parameters
     ----------
@@ -903,33 +907,49 @@ def _multiscale_demons(
         moving-image points for resampling into fixed-image space.
     """
 
-    fixed_images = [fixed_image]
-    moving_images = [moving_image]
+    pyramid_levels = list(zip(shrink_factors, smoothing_sigmas, strict=True))
+    if len(pyramid_levels) > 0:
+        first_shrink_factor, first_smoothing_sigma = pyramid_levels[0]
+        fixed_level = _smooth_and_resample(fixed_image, first_shrink_factor, first_smoothing_sigma)
+        moving_level = _smooth_and_resample(moving_image, first_shrink_factor, first_smoothing_sigma)
+        remaining_levels = pyramid_levels[1:]
+    else:
+        fixed_level = fixed_image
+        moving_level = moving_image
+        remaining_levels = []
 
-    for shrink_factor, smoothing_sigma in reversed(list(zip(shrink_factors, smoothing_sigmas, strict=True))):
-        fixed_images.append(_smooth_and_resample(fixed_images[0], shrink_factor, smoothing_sigma))
-        moving_images.append(_smooth_and_resample(moving_images[0], shrink_factor, smoothing_sigma))
-
+    # Demons filters require vector float64 displacement fields. The initial
+    # transform is rasterized on the coarsest fixed-image grid, then refined and
+    # resampled onto each progressively finer fixed-image grid.
     displacement_field = sitk.TransformToDisplacementField(  # type: ignore[no-untyped-call]
         initial_transform,
         sitk.sitkVectorFloat64,
-        fixed_images[-1].GetSize(),  # type: ignore[no-untyped-call]
-        fixed_images[-1].GetOrigin(),  # type: ignore[no-untyped-call]
-        fixed_images[-1].GetSpacing(),  # type: ignore[no-untyped-call]
-        fixed_images[-1].GetDirection(),  # type: ignore[no-untyped-call]
+        fixed_level.GetSize(),  # type: ignore[no-untyped-call]
+        fixed_level.GetOrigin(),  # type: ignore[no-untyped-call]
+        fixed_level.GetSpacing(),  # type: ignore[no-untyped-call]
+        fixed_level.GetDirection(),  # type: ignore[no-untyped-call]
     )
     displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
-        fixed_images[-1],
-        moving_images[-1],
+        fixed_level,
+        moving_level,
         displacement_field,
     )
 
-    for fixed_level, moving_level in reversed(list(zip(fixed_images[0:-1], moving_images[0:-1], strict=True))):
+    for shrink_factor, smoothing_sigma in remaining_levels:
+        fixed_level = _smooth_and_resample(fixed_image, shrink_factor, smoothing_sigma)
+        moving_level = _smooth_and_resample(moving_image, shrink_factor, smoothing_sigma)
         displacement_field = sitk.Resample(displacement_field, fixed_level)
         displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
             fixed_level,
             moving_level,
             displacement_field,
         )
+
+    displacement_field = sitk.Resample(displacement_field, fixed_image)
+    displacement_field = registration_algorithm.Execute(  # type: ignore[no-untyped-call]
+        fixed_image,
+        moving_image,
+        displacement_field,
+    )
 
     return sitk.DisplacementFieldTransform(displacement_field)  # type: ignore[no-untyped-call]

@@ -1,4 +1,5 @@
 import itertools
+import logging
 from pathlib import Path
 from typing import cast
 
@@ -20,6 +21,8 @@ from src.pipeline.helpers.helpers import (
     _resolve_metric_device,
     _validate_3d_pair,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
@@ -124,6 +127,8 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
     if window_size < 3:
         raise ValueError(f"SSIM window is invalid for image shape {tuple(pred_t.shape)}")
 
+    # MONAI expects [batch, channel, H, W, D]. The metric returns a tensor, so
+    # reduce explicitly to a Python float for CSV-friendly output.
     metric = SSIMMetric(
         spatial_dims=3,
         data_range=data_max - data_min,
@@ -254,6 +259,8 @@ def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
     derivative = torch.tensor([-1.0, 0.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
     smoothing = torch.tensor([1.0, 2.0, 1.0], dtype=arr_t.dtype, device=arr_t.device)
 
+    # Build separable 3D Sobel kernels for x/y/z gradients, then apply all
+    # three filters in one conv3d call.
     kernel_x = derivative[:, None, None] * smoothing[None, :, None] * smoothing[None, None, :]
     kernel_y = smoothing[:, None, None] * derivative[None, :, None] * smoothing[None, None, :]
     kernel_z = smoothing[:, None, None] * smoothing[None, :, None] * derivative[None, None, :]
@@ -384,6 +391,8 @@ def lpips_3d(
     if ref_t.min() < data_min or ref_t.max() > data_max:
         raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
+    # LPIPS is 2D, so sample a bounded number of slices instead of expanding
+    # the full 3D volume into a very large pseudo-batch.
     pred_tensor = _evenly_spaced_slices_for_lpips(
         (pred_t - data_min) / (data_max - data_min),
         max_slices=max_slices,
@@ -451,6 +460,7 @@ def calculate_similarity_metrics(
     device = torch.device(config.device)
     rows = []
 
+    logger.info("Image similarity metrics will run on %s", device)
     for patient_id, gen_paths in tqdm(
         generated.items(),
         desc="Calculating generated vs real image metrics",
@@ -459,14 +469,16 @@ def calculate_similarity_metrics(
         ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
 
         if len(all_ref_paths) == 0:
-            print(f"Skipping {patient_id}: no original/reference CT found")
+            logger.warning("Skipping %s: no original/reference CT found", patient_id)
             continue
 
         if len(ref_paths) == 0:
-            print(f"Skipping {patient_id}: no non-planning original/reference CT found")
+            logger.warning("Skipping %s: no non-planning original/reference CT found", patient_id)
             continue
 
         patient_paths = [*gen_paths, *ref_paths]
+        # Image metrics reuse each generated/reference CT multiple times for a
+        # patient, so caching the patient tensors avoids repeated disk loads.
         patient_tensors = _cache_patient_cts(patient_paths, config=config, device=device)
 
         for gen_path in gen_paths:
@@ -475,10 +487,13 @@ def calculate_similarity_metrics(
                 ref_arr = patient_tensors[ref_path]
 
                 if gen_arr.shape != ref_arr.shape:
-                    print(
-                        f"Skipping shape mismatch for {patient_id}: "
-                        f"{gen_path.name} {tuple(gen_arr.shape)} vs "
-                        f"{ref_path.name} {tuple(ref_arr.shape)}"
+                    logger.warning(
+                        "Skipping shape mismatch for %s: %s %s vs %s %s",
+                        patient_id,
+                        gen_path.name,
+                        tuple(gen_arr.shape),
+                        ref_path.name,
+                        tuple(ref_arr.shape),
                     )
                     continue
 
@@ -513,17 +528,22 @@ def calculate_similarity_metrics(
         )
 
     df = pd.DataFrame(rows)
-    df.to_csv(config.metrics_dir / "generated_vs_real_metrics.csv", index=False)
+    metrics_path = config.metrics_dir / "generated_vs_real_metrics.csv"
+    df.to_csv(metrics_path, index=False)
+    logger.info("Saved generated-vs-real image metrics: %s", metrics_path)
 
     summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
         ["mean", "std", "min", "max", "count"]
     )
-    summary.to_csv(config.metrics_dir / "generated_vs_real_summary.csv")
+    summary_path = config.metrics_dir / "generated_vs_real_summary.csv"
+    summary.to_csv(summary_path)
+    logger.info("Saved generated-vs-real image metric summary: %s", summary_path)
 
 
 def calculate_pairwise_variety_metrics(
     ct_groups: dict[str, list[Path]],
     config: MaisiTestingConfig,
+    lpips_model: LPIPSModel | None = None,
 ) -> None:
     """
     Calculate pairwise variety metrics within groups of CT images.
@@ -546,6 +566,10 @@ def calculate_pairwise_variety_metrics(
     config : MaisiTestingConfig
         Configuration object containing evaluation settings.
 
+    lpips_model : LPIPSModel | None, optional
+        Optional initialized LPIPS model. Reusing the model from
+        ``calculate_similarity_metrics`` avoids constructing it twice.
+
     Raises
     ------
     ValueError
@@ -559,24 +583,35 @@ def calculate_pairwise_variety_metrics(
         raise ValueError("`ct_groups` cannot be empty")
 
     device = torch.device(config.device)
-    lpips_model = _build_lpips_model(config)
+    if config.use_lpips and lpips_model is None:
+        lpips_model = _build_lpips_model(config)
     rows = []
 
+    logger.info("Pairwise variety metrics will run on %s", device)
     for patient_id, paths in tqdm(ct_groups.items(), desc="Calculating pairwise variety metrics"):
         if len(paths) < 2:
-            print(f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s).")
+            logger.warning(
+                "Skipping pairwise generated variety metrics for %s: only %d image(s)",
+                patient_id,
+                len(paths),
+            )
             continue
 
+        # Pairwise metrics compare every generated CT pair for a patient, so
+        # each tensor is loaded once and reused across all combinations.
         patient_tensors = _cache_patient_cts(paths, config=config, device=device)
 
         for path_a, path_b in itertools.combinations(paths, 2):
             arr_a = patient_tensors[path_a]
             arr_b = patient_tensors[path_b]
             if arr_a.shape != arr_b.shape:
-                print(
-                    f"Skipping shape mismatch for {patient_id}: "
-                    f"{path_a.name} {tuple(arr_a.shape)} vs "
-                    f"{path_b.name} {tuple(arr_b.shape)}"
+                logger.warning(
+                    "Skipping shape mismatch for %s: %s %s vs %s %s",
+                    patient_id,
+                    path_a.name,
+                    tuple(arr_a.shape),
+                    path_b.name,
+                    tuple(arr_b.shape),
                 )
                 continue
 
@@ -604,13 +639,17 @@ def calculate_pairwise_variety_metrics(
             rows.append(row)
 
     if len(rows) == 0:
-        print("Skipping generated pairwise variety metrics: no valid pairwise comparisons were calculated")
+        logger.warning("Skipping generated pairwise variety metrics: no valid pairwise comparisons were calculated")
         return
 
     df = pd.DataFrame(rows)
-    df.to_csv(config.metrics_dir / "generated_pairwise_variety_metrics.csv", index=False)
+    metrics_path = config.metrics_dir / "generated_pairwise_variety_metrics.csv"
+    df.to_csv(metrics_path, index=False)
+    logger.info("Saved generated pairwise variety metrics: %s", metrics_path)
 
     summary = df.groupby("patient_id")[["mae", "ssim", "psnr", "sob", "lpips"]].agg(
         ["mean", "std", "min", "max", "count"]
     )
-    summary.to_csv(config.metrics_dir / "generated_pairwise_variety_metrics_summary.csv")
+    summary_path = config.metrics_dir / "generated_pairwise_variety_metrics_summary.csv"
+    summary.to_csv(summary_path)
+    logger.info("Saved generated pairwise variety metric summary: %s", summary_path)

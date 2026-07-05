@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,8 @@ from tqdm import tqdm
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     _as_binary_mask_pair,
-    _cache_patient_cts,
     _is_planning_ct_path,
+    _load_hu_tensor,
     _multiscale_demons,
     _nearest_distances,
     _sitk_image_to_tensor,
@@ -30,14 +31,55 @@ from src.pipeline.helpers.helpers import (
     _tensor_to_sitk_image,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
+    """
+    Create the preprocessing transform for structure label maps.
+
+    This mirrors the geometric part of CT preprocessing but deliberately skips
+    intensity scaling. Structure masks are categorical labels, so interpolation
+    or HU scaling would corrupt the label values. The transform is built once
+    per structure-metric run and reused for all label maps.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing target image size.
+
+    Returns
+    -------
+    transform : Compose
+        MONAI dictionary transform that loads a label-map NIfTI file and
+        returns an integer tensor on the pipeline target grid.
+    """
+
+    return Compose(
+        [
+            LoadImaged(keys="label"),
+            EnsureChannelFirstd(keys="label"),
+            Orientationd(keys="label", axcodes="RAS", labels=None),
+            SpatialPadd(
+                keys="label",
+                spatial_size=config.target_image_size,
+                mode="constant",
+                constant_values=0,
+            ),
+            CenterSpatialCropd(keys="label", roi_size=config.target_image_size),
+            EnsureTyped(keys="label", dtype=torch.int16),
+        ]
+    )
+
 
 def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
     """
     Calculate Dice Similarity Coefficient (DSC) for two 3D masks.
 
     DSC measures spatial overlap between two binary structure masks. Non-zero
-    values are treated as foreground. If both masks are empty, the score is
-    defined as 1.0 because the masks agree perfectly on foreground absence.
+    values are treated as foreground. If both masks have no foreground voxels,
+    the score is defined as 1.0 because the masks agree perfectly on
+    foreground absence.
 
     Parameters
     ----------
@@ -55,7 +97,7 @@ def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.nda
     Raises
     ------
     ValueError
-        If either mask is empty.
+        If either mask has zero elements.
         If either mask is not 3-dimensional.
         If the masks have different shapes.
     """
@@ -70,23 +112,20 @@ def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.nda
     return float((2.0 * (pred_t & ref_t).sum().item()) / (pred_sum + ref_sum))
 
 
-def hausdorff_distance(
+def _surface_distances(
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
-    spacing: tuple[float, float, float] = (1.0, 1.0, 1.0),
-    percentile: float | None = None,
-) -> float:
+    spacing: tuple[float, float, float],
+) -> torch.Tensor | float:
     """
-    Calculate symmetric Hausdorff distance for two 3D masks.
+    Calculate symmetric foreground-surface distances for two masks.
 
-    The distance is computed between foreground surface voxels in physical
-    units using the provided voxel spacing. When ``percentile`` is provided,
-    this function returns the corresponding percentile Hausdorff distance, such
-    as HD95 for ``percentile=95``.
-
-    Empty-mask convention:
-    - Both masks empty -> 0.0.
-    - Only one mask empty -> positive infinity.
+    Surface voxels are extracted from both masks, converted to physical
+    coordinates using ``spacing``, and compared in both directions with
+    batched nearest-neighbor distances. Foreground-empty masks follow the
+    metric convention used by the structure evaluation: both foreground-empty
+    masks return ``0.0`` and one foreground-empty mask returns positive
+    infinity.
 
     Parameters
     ----------
@@ -99,22 +138,18 @@ def hausdorff_distance(
     spacing : tuple[float, float, float]
         Physical voxel spacing for the mask axes.
 
-    percentile : float | None
-        Optional percentile in the interval (0, 100]. If None, the maximum
-        surface distance is returned.
-
     Returns
     -------
-    hd : float
-        Symmetric Hausdorff distance in physical units.
+    distances : torch.Tensor | float
+        Symmetric surface distances for masks with foreground voxels, or a
+        scalar foreground-empty convention value.
 
     Raises
     ------
     ValueError
-        If either mask is empty.
+        If either mask has zero elements.
         If either mask is not 3-dimensional.
         If the masks have different shapes.
-        If ``percentile`` is outside the interval (0, 100].
     """
 
     pred_t, ref_t = _as_binary_mask_pair(pred, ref)
@@ -130,12 +165,16 @@ def hausdorff_distance(
     pred_surface = _surface_voxels(pred_t)
     ref_surface = _surface_voxels(ref_t)
 
+    # Work with surface coordinates rather than all foreground voxels. This is
+    # both the Hausdorff definition and much smaller than dense mask distances.
     pred_points = pred_surface.nonzero().float()
     ref_points = ref_surface.nonzero().float()
     spacing_t = torch.as_tensor(spacing, dtype=torch.float32, device=pred_points.device)
     pred_points = pred_points * spacing_t
     ref_points = ref_points * spacing_t
 
+    # Compute both directions so HD is symmetric. _nearest_distances batches
+    # cdist internally to avoid one huge [N_surface, M_surface] allocation.
     distances = torch.cat(
         [
             _nearest_distances(pred_points, ref_points),
@@ -143,21 +182,25 @@ def hausdorff_distance(
         ]
     )
 
-    if percentile is None:
-        return float(distances.max().item())
-
-    if percentile <= 0.0 or percentile > 100.0:
-        raise ValueError(f"`percentile` must be in (0, 100]. Got {percentile}")
-
-    return float(torch.quantile(distances, percentile / 100.0).item())
+    return distances
 
 
-def hd95(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, spacing: tuple[float, float, float]) -> float:
+def hausdorff_and_hd95(
+    pred: torch.Tensor | np.ndarray,
+    ref: torch.Tensor | np.ndarray,
+    spacing: tuple[float, float, float],
+) -> tuple[float, float]:
     """
-    Calculate the 95th percentile Hausdorff distance (HD95).
+    Calculate HD and HD95 from a single surface-distance pass.
 
-    HD95 is less sensitive to isolated outlier voxels than the maximum
-    Hausdorff distance while still measuring boundary disagreement.
+    HD is the maximum symmetric surface distance. HD95 is the 95th percentile
+    of the same symmetric surface-distance distribution, making it less
+    sensitive to isolated outlier voxels. Calculating both together avoids
+    recomputing surfaces and pairwise nearest-neighbor distances.
+
+    Foreground-empty mask convention:
+    - Both masks have no foreground voxels -> ``(0.0, 0.0)``.
+    - Only one mask has no foreground voxels -> ``(inf, inf)``.
 
     Parameters
     ----------
@@ -172,14 +215,29 @@ def hd95(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, spacin
 
     Returns
     -------
-    hd95 : float
-        Symmetric 95th percentile Hausdorff distance in physical units.
+    metrics : tuple[float, float]
+        Pair containing symmetric Hausdorff distance and HD95 in physical
+        units.
+
+    Raises
+    ------
+    ValueError
+        If either mask has zero elements.
+        If either mask is not 3-dimensional.
+        If the masks have different shapes.
     """
 
-    return hausdorff_distance(pred, ref, spacing=spacing, percentile=95.0)
+    distances = _surface_distances(pred, ref, spacing)
+
+    if isinstance(distances, float):
+        return distances, distances
+
+    # HD and HD95 share the same surface-distance tensor, avoiding a second
+    # surface extraction and nearest-neighbor pass for every mask comparison.
+    return float(distances.max().item()), float(torch.quantile(distances, 0.95).item())
 
 
-def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Tensor:
+def load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
     """
     Load and preprocess a structure label map to the pipeline target grid.
 
@@ -192,9 +250,9 @@ def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Te
     path : Path
         Path to a structure label-map NIfTI file.
 
-    config : MaisiTestingConfig
-        Pipeline configuration containing target image size and transform
-        settings.
+    transform : Compose
+        Label-map preprocessing transform returned by
+        ``get_structure_label_transform``.
 
     Returns
     -------
@@ -202,22 +260,6 @@ def load_structure_label_map(path: Path, config: MaisiTestingConfig) -> torch.Te
         Integer 3D label map on CPU with shape matching
         ``config.target_image_size``.
     """
-
-    transform = Compose(
-        [
-            LoadImaged(keys="label"),
-            EnsureChannelFirstd(keys="label"),
-            Orientationd(keys="label", axcodes="RAS", labels=None),
-            SpatialPadd(
-                keys="label",
-                spatial_size=config.target_image_size,
-                mode="constant",
-                constant_values=0,
-            ),
-            CenterSpatialCropd(keys="label", roi_size=config.target_image_size),
-            EnsureTyped(keys="label", dtype=torch.int16),
-        ]
-    )
 
     transformed = transform({"label": str(path)})
     label_meta: MetaTensor = transformed["label"]
@@ -262,9 +304,10 @@ def register_planning_ct_to_generated_ct(
     Register a planning CT to a generated CT.
 
     The generated CT is used as the fixed image and the planning CT as the
-    moving image. The returned SimpleITK transform maps planning CT space into
-    generated CT space, so it can be reused to warp every selected planning
-    structure label for the same generated CT.
+    moving image. For SimpleITK resampling, the returned displacement-field
+    transform maps generated/fixed-grid physical points back into
+    planning/moving CT space. Reusing that transform lets each planning
+    structure mask be sampled onto the generated CT grid.
 
     Parameters
     ----------
@@ -281,10 +324,13 @@ def register_planning_ct_to_generated_ct(
     Returns
     -------
     transform : Any
-        SimpleITK displacement-field transform from planning CT space to
-        generated CT space.
+        SimpleITK displacement-field transform mapping generated/fixed-grid
+        points into planning/moving CT space for resampling.
     """
 
+    # SimpleITK registration runs on CPU. Callers keep CT tensors on CPU here
+    # so we do not reserve VRAM for volumes that are immediately converted to
+    # SimpleITK images.
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
     moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
 
@@ -299,6 +345,9 @@ def register_planning_ct_to_generated_ct(
         sitk.Euler3DTransform(),  # type: ignore[no-untyped-call]
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
+
+    # The multiscale helper rasterizes the initial rigid transform into a DVF,
+    # then refines that field from coarse to full resolution.
     return _multiscale_demons(
         registration_algorithm=demons_filter,
         fixed_image=fixed,
@@ -318,7 +367,9 @@ def warp_planning_mask_to_generated_ct(
     """
     Warp a planning structure mask into generated CT space.
 
-    Nearest-neighbor interpolation is used to preserve the binary mask labels.
+    The transform maps each generated-grid output point back into planning
+    mask space, which is the direction expected by ``sitk.Resample``.
+    Nearest-neighbor interpolation is used to preserve binary mask labels.
 
     Parameters
     ----------
@@ -330,7 +381,8 @@ def warp_planning_mask_to_generated_ct(
 
     transform : Any
         SimpleITK transform returned by
-        ``register_planning_ct_to_generated_ct``.
+        ``register_planning_ct_to_generated_ct``. It maps generated/fixed-grid
+        points into planning/moving mask space.
 
     config : MaisiTestingConfig
         Pipeline configuration containing spacing and image-grid settings.
@@ -341,8 +393,9 @@ def warp_planning_mask_to_generated_ct(
         Boolean 3D mask in generated CT space.
     """
 
+    # The generated CT is used only as the reference grid: size, spacing,
+    # origin, and direction define where the warped planning mask is sampled.
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
-
     moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
 
     resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
@@ -402,12 +455,24 @@ def calculate_structure_similarity_metrics(
     """
 
     if not config.use_structure_metrics:
+        logger.info("Skipping structure metrics: disabled by configuration")
         return
 
+    logger.info(
+        "Calculating structure metrics: "
+        f"{len(generated)} patient group(s), labels={config.structure_labels}, metric_device={config.device}"
+    )
+
     rows: list[dict[str, Any]] = []
-    device = torch.device(config.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
+    metric_device = torch.device(config.device)
+    cpu_device = torch.device("cpu")
+    if metric_device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("Structure metrics requested CUDA, but torch.cuda.is_available() is False")
+
+    # Structure label maps use the same geometry as preprocessed CTs, but their
+    # label-preserving transform is not saved by prepare_test_data. Build it
+    # once here and reuse it for every planning/reference structure file.
+    structure_transform = get_structure_label_transform(config)
 
     for patient_id, gen_paths in tqdm(generated.items(), desc="Calculating generated vs real structure metrics"):
         all_ref_paths = originals.get(patient_id, [])
@@ -415,92 +480,117 @@ def calculate_structure_similarity_metrics(
         planning_paths = [path for path in all_ref_paths if _is_planning_ct_path(path)]
 
         if len(ref_paths) == 0 or len(planning_paths) == 0:
-            print(f"Skipping structure metrics for {patient_id}: missing planning or non-planning CT")
+            logger.warning("Skipping structure metrics for %s: missing planning or non-planning CT", patient_id)
             continue
 
         planning_ct_path = planning_paths[0]
         planning_structure_path = _structure_path_for_ct(planning_ct_path, config)
 
         if not planning_structure_path.exists():
-            print(f"Skipping structure metrics for {patient_id}: missing {planning_structure_path}")
+            logger.warning("Skipping structure metrics for %s: missing %s", patient_id, planning_structure_path)
             continue
 
-        patient_tensors = _cache_patient_cts([*gen_paths, *ref_paths, planning_ct_path], config=config, device=device)
-        planning_ct = patient_tensors[planning_ct_path]
-        planning_label_map = load_structure_label_map(planning_structure_path, config)
+        # Registration and mask warping go through SimpleITK, so keep CT
+        # volumes on CPU and avoid caching all patient CTs in CUDA memory.
+        planning_ct = _load_hu_tensor(planning_ct_path, config=config, device=cpu_device)
+        planning_label_map = load_structure_label_map(planning_structure_path, structure_transform)
+        planning_masks = {label: label_to_binary_mask(planning_label_map, label) for label in config.structure_labels}
 
-        generated_masks: dict[tuple[Path, int], torch.Tensor] = {}
-
-        for gen_path in gen_paths:
-            gen_ct = patient_tensors[gen_path]
-
-            if gen_ct.shape != planning_ct.shape:
-                print(
-                    f"Skipping structure registration for {patient_id}: "
-                    f"{gen_path.name} {tuple(gen_ct.shape)} vs planning {tuple(planning_ct.shape)}"
-                )
+        ref_label_maps: dict[Path, torch.Tensor] = {}
+        for ref_path in ref_paths:
+            ref_structure_path = _structure_path_for_ct(ref_path, config)
+            if not ref_structure_path.exists():
+                logger.warning("Skipping missing reference structure for %s: %s", patient_id, ref_structure_path)
                 continue
 
-            transform = register_planning_ct_to_generated_ct(
-                planning_ct=planning_ct,
-                generated_ct=gen_ct,
-                config=config,
-            )
+            ref_label_maps[ref_path] = load_structure_label_map(ref_structure_path, structure_transform)
 
-            for label in config.structure_labels:
-                planning_mask = label_to_binary_mask(planning_label_map, label)
-                generated_masks[(gen_path, label)] = warp_planning_mask_to_generated_ct(
-                    planning_mask=planning_mask,
-                    generated_ct=gen_ct,
-                    transform=transform,
-                    config=config,
-                ).to(device)
+        if len(ref_label_maps) == 0:
+            continue
 
         for gen_path in gen_paths:
-            for ref_path in ref_paths:
-                ref_structure_path = _structure_path_for_ct(ref_path, config)
-                if not ref_structure_path.exists():
-                    print(f"Skipping missing reference structure for {patient_id}: {ref_structure_path}")
-                    continue
+            gen_ct = _load_hu_tensor(gen_path, config=config, device=cpu_device)
 
-                ref_label_map = load_structure_label_map(ref_structure_path, config)
+            if gen_ct.shape != planning_ct.shape:
+                logger.warning(
+                    "Skipping structure registration for %s: %s %s vs planning %s",
+                    patient_id,
+                    gen_path.name,
+                    tuple(gen_ct.shape),
+                    tuple(planning_ct.shape),
+                )
+                del gen_ct
+                continue
+
+            with torch.inference_mode():
+                logger.info("Generating structure DVF for %s: planning -> %s", patient_id, gen_path.name)
+                transform = register_planning_ct_to_generated_ct(
+                    planning_ct=planning_ct,
+                    generated_ct=gen_ct,
+                    config=config,
+                )
 
                 for label in config.structure_labels:
-                    pred_mask = generated_masks.get((gen_path, label))
-                    if pred_mask is None:
-                        continue
+                    # Warp one planning label at a time. Only the current
+                    # predicted/reference masks are moved to metric_device, so
+                    # CUDA sees small boolean masks rather than full CT caches.
+                    pred_mask = warp_planning_mask_to_generated_ct(
+                        planning_mask=planning_masks[label],
+                        generated_ct=gen_ct,
+                        transform=transform,
+                        config=config,
+                    ).to(metric_device)
 
-                    ref_mask = label_to_binary_mask(ref_label_map, label).to(device)
-                    if pred_mask.shape != ref_mask.shape:
-                        print(
-                            f"Skipping structure shape mismatch for {patient_id}, label {label}: "
-                            f"{tuple(pred_mask.shape)} vs {tuple(ref_mask.shape)}"
+                    for ref_path, ref_label_map in ref_label_maps.items():
+                        ref_structure_path = _structure_path_for_ct(ref_path, config)
+                        ref_mask = label_to_binary_mask(ref_label_map, label).to(metric_device)
+                        if pred_mask.shape != ref_mask.shape:
+                            logger.warning(
+                                "Skipping structure shape mismatch for %s, label %s: %s vs %s",
+                                patient_id,
+                                label,
+                                tuple(pred_mask.shape),
+                                tuple(ref_mask.shape),
+                            )
+                            del ref_mask
+                            continue
+
+                        hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
+                        rows.append(
+                            {
+                                "patient_id": patient_id,
+                                "comparison_type": "generated_structure_vs_real_structure",
+                                "generated_path": str(gen_path),
+                                "reference_path": str(ref_path),
+                                "planning_structure_path": str(planning_structure_path),
+                                "reference_structure_path": str(ref_structure_path),
+                                "structure_label": label,
+                                "dice": dice_coefficient(pred_mask, ref_mask),
+                                "hd": hd,
+                                "hd95": hd95_value,
+                            }
                         )
-                        continue
 
-                    rows.append(
-                        {
-                            "patient_id": patient_id,
-                            "comparison_type": "generated_structure_vs_real_structure",
-                            "generated_path": str(gen_path),
-                            "reference_path": str(ref_path),
-                            "planning_structure_path": str(planning_structure_path),
-                            "reference_structure_path": str(ref_structure_path),
-                            "structure_label": label,
-                            "dice": dice_coefficient(pred_mask, ref_mask),
-                            "hd": hausdorff_distance(pred_mask, ref_mask, spacing=config.spacing),
-                            "hd95": hd95(pred_mask, ref_mask, spacing=config.spacing),
-                        }
-                    )
+                        del ref_mask
+
+                    del pred_mask
+
+            del gen_ct, transform
+            if metric_device.type == "cuda":
+                torch.cuda.empty_cache()
 
     if len(rows) == 0:
-        print("Skipping structure metrics: no valid structure comparisons were calculated")
+        logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
         return
 
     df = pd.DataFrame(rows)
-    df.to_csv(config.metrics_dir / "generated_vs_real_structure_metrics.csv", index=False)
+    metrics_path = config.metrics_dir / "generated_vs_real_structure_metrics.csv"
+    df.to_csv(metrics_path, index=False)
+    logger.info("Saved structure metrics: %s", metrics_path)
 
     summary = df.groupby(["patient_id", "structure_label"])[["dice", "hd", "hd95"]].agg(
         ["mean", "std", "min", "max", "count"]
     )
-    summary.to_csv(config.metrics_dir / "generated_vs_real_structure_summary.csv")
+    summary_path = config.metrics_dir / "generated_vs_real_structure_summary.csv"
+    summary.to_csv(summary_path)
+    logger.info("Saved structure metric summary: %s", summary_path)
