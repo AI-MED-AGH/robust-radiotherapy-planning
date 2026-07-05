@@ -162,7 +162,7 @@ def _surface_distances(
 
     if pred_empty or ref_empty:
         return float("inf")
-    
+
     # Hausdorff distance is defined on mask boundaries
     pred_surface = _surface_voxels(pred_t)
     ref_surface = _surface_voxels(ref_t)

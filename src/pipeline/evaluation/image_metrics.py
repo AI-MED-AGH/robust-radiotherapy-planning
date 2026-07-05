@@ -590,9 +590,7 @@ def calculate_pairwise_variety_metrics(
     logger.info("Pairwise variety metrics will run on %s", device)
     for patient_id, paths in tqdm(ct_groups.items(), desc="Calculating pairwise variety metrics"):
         if len(paths) < 2:
-            warnings.append(
-                f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s)"
-            )
+            warnings.append(f"Skipping pairwise generated variety metrics for {patient_id}: only {len(paths)} image(s)")
             continue
 
         # Pairwise metrics compare every generated CT pair for a patient, so
