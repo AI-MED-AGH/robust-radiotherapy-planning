@@ -199,6 +199,8 @@ def prepare_test_data(
         If the processed CT output directory cannot be cleared.
     """
 
+    clear_directory_contents(config.processed_ct_dir)
+
     data_dict = create_data_split_dict(
         seed=seed,
         train_fraction=train_fraction,
@@ -229,8 +231,6 @@ def prepare_test_data(
         raise ValueError(
             f"The {config.evaluation_split} split is empty. Cannot prepare MAISI {config.evaluation_split} data"
         )
-
-    clear_directory_contents(config.processed_ct_dir)
 
     process_and_save_cts(
         config=config,
