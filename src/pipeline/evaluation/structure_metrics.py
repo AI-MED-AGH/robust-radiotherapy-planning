@@ -12,7 +12,6 @@ from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
-    _clean_pipeline_memory,
     _get_structure_label_transform,
     _is_planning_ct_path,
     _label_to_binary_mask,
@@ -309,13 +308,6 @@ def calculate_structure_similarity_metrics(
                                 "hd95": hd95_value,
                             }
                         )
-
-                        del ref_mask
-
-                    del pred_mask
-
-            del gen_ct, transform
-            _clean_pipeline_memory()
 
         if metric_device.type == "cuda" and len(gen_paths) > 1:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
