@@ -1226,7 +1226,7 @@ def _register_planning_ct_to_generated_ct(
     )
 
     # The multiscale helper rasterizes the initial rigid transform into a DVF,
-    # then refines that field from coarse to full resolution.
+    # then refines that field from coarse to full resolution
     return _multiscale_demons(
         registration_algorithm=demons_filter,
         fixed_image=fixed,
@@ -1272,7 +1272,7 @@ def _warp_planning_mask_to_generated_ct(
     """
 
     # The generated CT is used only as the reference grid: size, spacing,
-    # origin, and direction define where the warped planning mask is sampled.
+    # origin, and direction define where the warped planning mask is sampled
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
     moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
 
