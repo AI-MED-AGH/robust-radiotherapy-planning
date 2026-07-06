@@ -206,9 +206,7 @@ def calculate_structure_similarity_metrics(
         # Keep CT volumes on CPU instead of caching patient CTs in VRAM.
         planning_ct = _load_hu_tensor(planning_ct_path, config=config, device=cpu_device)
         planning_label_map = _load_structure_label_map(planning_structure_path, structure_transform)
-        planning_masks = {
-            label: _label_to_binary_mask(planning_label_map, label) for label in config.structure_labels
-        }
+        planning_masks = {label: _label_to_binary_mask(planning_label_map, label) for label in config.structure_labels}
 
         ref_label_maps: dict[Path, torch.Tensor] = {}
         for ref_path in ref_paths:
