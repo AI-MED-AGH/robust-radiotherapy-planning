@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _clean_pipeline_memory
 from src.pipeline.inference.encode_latents import load_vae_model
 
@@ -232,6 +233,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     Generate CT variants from planning CT latent conditions.
 
     This function:
+    - clears `config.generated_ct_dir`
     - loads the VAE decoder
     - loads the rectified flow model
     - loads latent planning CT tensors from `config.latent_ct_dir`
@@ -260,6 +262,9 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     ------
     ValueError
         If scheduler config is missing required settings.
+
+    OSError
+        If the generated CT output directory cannot be cleared.
     """
 
     device = torch.device(config.device)
@@ -270,7 +275,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     if "base_img_size_numel" not in config.scheduler_config:
         raise ValueError("`config.scheduler_config` must contain 'base_img_size_numel'")
 
-    config.generated_ct_dir.mkdir(parents=True, exist_ok=True)
+    clear_directory_contents(config.generated_ct_dir)
 
     vae_model = load_vae_model(config, device)
     rflow_model = load_rflow_model(config, device)
