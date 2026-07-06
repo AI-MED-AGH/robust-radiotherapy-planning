@@ -1,5 +1,6 @@
 import gc
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -7,10 +8,57 @@ import numpy as np
 import SimpleITK as sitk
 import torch
 import torch.nn.functional as F
+from monai.data.meta_tensor import MetaTensor
+from monai.transforms import (  # type: ignore[attr-defined]
+    CenterSpatialCropd,
+    Compose,
+    EnsureChannelFirstd,
+    EnsureTyped,
+    LoadImaged,
+    Orientationd,
+    SpatialPadd,
+)
 
 from src.pipeline.config import MaisiTestingConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _StructureRegistrationResult:
+    """
+    Store the CPU registration work product for one generated CT.
+
+    A result contains either a generated CT plus the transform needed for
+    structure warping, or a warning explaining why that generated CT should be
+    skipped. It is used by the background registration queue so metric
+    calculation can consume completed CPU work in generated-path order.
+
+    Attributes
+    ----------
+    gen_path : Path
+        Path to the generated CT tensor associated with this result.
+
+    gen_ct : torch.Tensor | None
+        Generated CT tensor loaded on CPU, or ``None`` when registration was
+        skipped before a valid transform could be produced.
+
+    transform : Any | None
+        SimpleITK transform mapping generated/fixed-grid points into
+        planning/moving CT space, or ``None`` when registration was skipped.
+
+    info_message : str | None, optional
+        Informational log message to emit after the result is consumed.
+
+    warning : str | None, optional
+        Warning message to emit when the generated CT cannot be evaluated.
+    """
+
+    gen_path: Path
+    gen_ct: torch.Tensor | None
+    transform: Any | None
+    info_message: str | None = None
+    warning: str | None = None
 
 
 class LPIPSModel(Protocol):
@@ -509,6 +557,102 @@ def _load_hu_tensor(
     )
 
 
+def _get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
+    """
+    Create the preprocessing transform for structure label maps.
+
+    This mirrors the geometric part of CT preprocessing but deliberately skips
+    intensity scaling. Structure masks are categorical labels, so interpolation
+    or HU scaling would corrupt the label values. The transform is built once
+    per structure-metric run and reused for all label maps.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing target image size.
+
+    Returns
+    -------
+    transform : Compose
+        MONAI dictionary transform that loads a label-map NIfTI file and
+        returns an integer tensor on the pipeline target grid.
+    """
+
+    return Compose(
+        [
+            LoadImaged(keys="label"),
+            EnsureChannelFirstd(keys="label"),
+            Orientationd(keys="label", axcodes="RAS", labels=None),
+            SpatialPadd(
+                keys="label",
+                spatial_size=config.target_image_size,
+                mode="constant",
+                constant_values=0,
+            ),
+            CenterSpatialCropd(keys="label", roi_size=config.target_image_size),
+            EnsureTyped(keys="label", dtype=torch.int16),
+        ]
+    )
+
+
+def _load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
+    """
+    Load and preprocess a structure label map to the pipeline target grid.
+
+    The transform mirrors the CT preprocessing geometry: load image, enforce
+    channel-first format, reorient to RAS, pad/crop to the configured target
+    image size, and return an integer label tensor.
+
+    Parameters
+    ----------
+    path : Path
+        Path to a structure label-map NIfTI file.
+
+    transform : Compose
+        Label-map preprocessing transform returned by
+        ``_get_structure_label_transform``.
+
+    Returns
+    -------
+    label_map : torch.Tensor
+        Integer 3D label map on CPU with shape matching
+        ``config.target_image_size``.
+    """
+
+    transformed = transform({"label": str(path)})
+    label_meta: MetaTensor = transformed["label"]
+    label = label_meta.as_tensor().detach().cpu()[0]
+
+    return label.round().to(torch.int16)
+
+
+def _label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
+    """
+    Extract a binary structure mask from a label map.
+
+    Label 0 is treated as an aggregate foreground request and returns all
+    non-zero labels. Positive labels return only that exact label value.
+
+    Parameters
+    ----------
+    label_map : torch.Tensor
+        3D integer structure label map.
+
+    label : int
+        Structure label to extract. Use 0 for any non-background structure.
+
+    Returns
+    -------
+    mask : torch.Tensor
+        Boolean 3D mask for the requested structure.
+    """
+
+    if label <= 0:
+        return label_map != 0
+
+    return label_map == label
+
+
 def _cache_patient_cts(
     paths: list[Path],
     config: MaisiTestingConfig,
@@ -755,6 +899,78 @@ def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
     return config.structures_root / patient_id / structure_name
 
 
+def _surface_distances(
+    pred: torch.Tensor | np.ndarray,
+    ref: torch.Tensor | np.ndarray,
+    spacing: tuple[float, float, float],
+) -> torch.Tensor | float:
+    """
+    Calculate symmetric foreground-surface distances for two masks.
+
+    Surface voxels are extracted from both masks, converted to physical
+    coordinates using ``spacing``, and compared in both directions with
+    batched nearest-neighbor distances. Foreground-empty masks follow the
+    metric convention used by the structure evaluation: both foreground-empty
+    masks return ``0.0`` and one foreground-empty mask returns positive
+    infinity.
+
+    Parameters
+    ----------
+    pred : torch.Tensor | np.ndarray
+        Predicted, generated, or warped 3D structure mask.
+
+    ref : torch.Tensor | np.ndarray
+        Reference 3D structure mask.
+
+    spacing : tuple[float, float, float]
+        Physical voxel spacing for the mask axes.
+
+    Returns
+    -------
+    distances : torch.Tensor | float
+        Symmetric surface distances for masks with foreground voxels, or a
+        scalar foreground-empty convention value.
+
+    Raises
+    ------
+    ValueError
+        If either mask has zero elements.
+        If either mask is not 3-dimensional.
+        If the masks have different shapes.
+    """
+
+    pred_t, ref_t = _as_binary_mask_pair(pred, ref)
+    pred_empty = int(pred_t.sum().item()) == 0
+    ref_empty = int(ref_t.sum().item()) == 0
+
+    if pred_empty and ref_empty:
+        return 0.0
+
+    if pred_empty or ref_empty:
+        return float("inf")
+
+    # Hausdorff distance is defined on mask boundaries
+    pred_surface = _surface_voxels(pred_t)
+    ref_surface = _surface_voxels(ref_t)
+
+    # Surface coordinates are much smaller than dense foreground coordinates
+    pred_points = pred_surface.nonzero().float()
+    ref_points = ref_surface.nonzero().float()
+    spacing_t = torch.as_tensor(spacing, dtype=torch.float32, device=pred_points.device)
+    pred_points = pred_points * spacing_t
+    ref_points = ref_points * spacing_t
+
+    # Use both directions so HD is symmetric
+    distances = torch.cat(
+        [
+            _nearest_distances(pred_points, ref_points),
+            _nearest_distances(ref_points, pred_points),
+        ]
+    )
+
+    return distances
+
+
 def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:
     """
     Convert a pipeline tensor to a SimpleITK image.
@@ -957,3 +1173,179 @@ def _multiscale_demons(
     )
 
     return sitk.DisplacementFieldTransform(displacement_field)  # type: ignore[no-untyped-call]
+
+
+def _register_planning_ct_to_generated_ct(
+    planning_ct: torch.Tensor,
+    generated_ct: torch.Tensor,
+    config: MaisiTestingConfig,
+) -> Any:
+    """
+    Register a planning CT to a generated CT.
+
+    The generated CT is used as the fixed image and the planning CT as the
+    moving image. For SimpleITK resampling, the returned displacement-field
+    transform maps generated/fixed-grid physical points back into
+    planning/moving CT space. Reusing that transform lets each planning
+    structure mask be sampled onto the generated CT grid.
+
+    Parameters
+    ----------
+    planning_ct : torch.Tensor
+        Planning CT in HU-like units.
+
+    generated_ct : torch.Tensor
+        Generated CT in HU-like units.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing spacing and demons-registration
+        settings.
+
+    Returns
+    -------
+    transform : Any
+        SimpleITK displacement-field transform mapping generated/fixed-grid
+        points into planning/moving CT space for resampling.
+    """
+
+    # SimpleITK registration runs on CPU.
+    # These conversions detach tensors from any accelerator residency.
+    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
+    moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
+
+    demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore[no-untyped-call]
+    demons_filter.SetNumberOfIterations(config.structure_registration_iterations)  # type: ignore[no-untyped-call]
+    demons_filter.SetSmoothDisplacementField(True)  # type: ignore[no-untyped-call]
+    demons_filter.SetStandardDeviations(config.structure_registration_sigma)  # type: ignore[no-untyped-call]
+
+    initial_transform = sitk.CenteredTransformInitializer(  # type: ignore[no-untyped-call]
+        fixed,
+        moving,
+        sitk.Euler3DTransform(),  # type: ignore[no-untyped-call]
+        sitk.CenteredTransformInitializerFilter.GEOMETRY,
+    )
+
+    # The multiscale helper rasterizes the initial rigid transform into a DVF,
+    # then refines that field from coarse to full resolution.
+    return _multiscale_demons(
+        registration_algorithm=demons_filter,
+        fixed_image=fixed,
+        moving_image=moving,
+        initial_transform=initial_transform,
+        shrink_factors=config.structure_registration_shrink_factors,
+        smoothing_sigmas=config.structure_registration_smoothing_sigmas,
+    )
+
+
+def _warp_planning_mask_to_generated_ct(
+    planning_mask: torch.Tensor,
+    generated_ct: torch.Tensor,
+    transform: Any,
+    config: MaisiTestingConfig,
+) -> torch.Tensor:
+    """
+    Warp a planning structure mask into generated CT space.
+
+    The transform maps each generated-grid output point back into planning
+    mask space, which is the direction expected by ``sitk.Resample``.
+    Nearest-neighbor interpolation is used to preserve binary mask labels.
+
+    Parameters
+    ----------
+    planning_mask : torch.Tensor
+        Boolean or binary 3D structure mask in planning CT space.
+
+    generated_ct : torch.Tensor
+        Generated CT tensor used as the resampling reference grid.
+
+    transform : Any
+        SimpleITK transform mapping generated/fixed-grid points into
+        planning/moving mask space.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing spacing and image-grid settings.
+
+    Returns
+    -------
+    warped_mask : torch.Tensor
+        Boolean 3D mask in generated CT space.
+    """
+
+    # The generated CT is used only as the reference grid: size, spacing,
+    # origin, and direction define where the warped planning mask is sampled.
+    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
+    moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
+
+    resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
+    resampler.SetReferenceImage(fixed)  # type: ignore[no-untyped-call]
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
+    resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
+    resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
+    warped = resampler.Execute(moving_mask)  # type: ignore[no-untyped-call]
+
+    return _sitk_image_to_tensor(warped) > 0
+
+
+def _calculate_structure_registration_result(
+    gen_path: Path,
+    patient_id: str,
+    planning_ct: torch.Tensor,
+    config: MaisiTestingConfig,
+) -> _StructureRegistrationResult:
+    """
+    Load one generated CT and calculate its planning-to-generated transform.
+
+    This helper is intentionally CPU-only so it can run in a background thread
+    while CUDA evaluates metrics for the previous generated CT. Shape
+    mismatches are returned as warnings instead of being raised, which lets the
+    caller preserve the existing skip-and-continue behavior.
+
+    Parameters
+    ----------
+    gen_path : Path
+        Path to the generated CT tensor that should be registered.
+
+    patient_id : str
+        Patient identifier used only for diagnostic messages.
+
+    planning_ct : torch.Tensor
+        Planning CT tensor in HU-like units on CPU.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing CT intensity range, spacing, and
+        demons-registration settings.
+
+    Returns
+    -------
+    result : _StructureRegistrationResult
+        Registration result containing the generated CT and transform when
+        registration succeeds, or a warning when the generated CT is skipped.
+    """
+
+    cpu_device = torch.device("cpu")
+    gen_ct = _load_hu_tensor(gen_path, config=config, device=cpu_device)
+
+    if gen_ct.shape != planning_ct.shape:
+        warning = (
+            "Skipping structure registration for "
+            f"{patient_id}: {gen_path.name} {tuple(gen_ct.shape)} vs planning {tuple(planning_ct.shape)}"
+        )
+        return _StructureRegistrationResult(
+            gen_path=gen_path,
+            gen_ct=None,
+            transform=None,
+            warning=warning,
+        )
+
+    transform = _register_planning_ct_to_generated_ct(
+        planning_ct=planning_ct,
+        generated_ct=gen_ct,
+        config=config,
+    )
+
+    return _StructureRegistrationResult(
+        gen_path=gen_path,
+        gen_ct=gen_ct,
+        transform=transform,
+        info_message=f"Generated structure DVF for {patient_id}: planning -> {gen_path.name}",
+    )
