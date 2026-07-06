@@ -48,11 +48,24 @@ class MaisiTestingConfig:
     ct_root : Path
         Directory containing patient CT folders.
 
+    structures_root : Path
+        Directory containing patient structure-label folders used for
+        structure-based evaluation metrics.
+
     data_dict_path : Path
         Path to the dataset split JSON file.
 
     output_root : Path
         Root directory for all pipeline outputs.
+
+    evaluation_split : Literal["test", "val"]
+        Dataset split evaluated by the pipeline. When set to ``"val"``,
+        default split-specific output directories are redirected from
+        ``test`` to ``val``.
+
+    validation_fold : int
+        Validation fold index used when selecting validation patients from
+        the dataset split JSON.
 
     processed_ct_dir : Path
         Directory containing preprocessed CT data.
@@ -85,7 +98,7 @@ class MaisiTestingConfig:
         Number of rectified-flow sampling steps.
 
     latent_scale : float
-        Scaling factor applied to latent representations..
+        Scaling factor applied to latent representations.
 
     device : str
         Device used for model inference ("cuda" or "cpu").
@@ -127,6 +140,29 @@ class MaisiTestingConfig:
     max_lpips_slices : int
         Maximum number of slices to use for LPIPS calculation per volume.
 
+    use_structure_metrics : bool
+        Whether to calculate structure-based metrics during evaluation.
+
+    structure_labels : list[int]
+        Integer label values identifying the structures to include in
+        structure-based metrics.
+
+    structure_registration_iterations : int
+        Number of iterations used by the demons registration filter when
+        aligning fixed and generated CTs for structure evaluation.
+
+    structure_registration_sigma : float
+        Gaussian smoothing standard deviation used by the demons registration
+        filter during structure evaluation.
+
+    structure_registration_shrink_factors : list[float]
+        Per-level shrink factors used for multiscale structure registration,
+        ordered from coarse to fine resolution.
+
+    structure_registration_smoothing_sigmas : list[float]
+        Per-level smoothing sigmas used for multiscale structure registration,
+        ordered from coarse to fine resolution.
+
     vae_config : dict | None
         VAE architecture configuration.
         If None, a default MAISI configuration is used.
@@ -164,6 +200,7 @@ class MaisiTestingConfig:
     # Data paths
     data_root: Path = Path("src/data_full")
     ct_root: Path = data_root / "CT"
+    structures_root: Path = data_root / "STRUCTURES"
     data_dict_path: Path = data_root / "data_dict.json"
 
     # Output paths
@@ -218,6 +255,14 @@ class MaisiTestingConfig:
     use_lpips: bool = True
     lpips_net: Literal["alex", "vgg", "squeeze"] = "alex"
     max_lpips_slices: int = 16
+
+    # Structure metric arguments
+    use_structure_metrics: bool = True
+    structure_labels: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
+    structure_registration_iterations: int = 120
+    structure_registration_sigma: float = 0.6
+    structure_registration_shrink_factors: list[float] = field(default_factory=lambda: [16, 8, 4, 2])
+    structure_registration_smoothing_sigmas: list[float] = field(default_factory=lambda: [16, 8, 4, 2])
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict[str, Any] | None = None
@@ -312,6 +357,9 @@ class MaisiTestingConfig:
 
         if not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
+
+        if self.use_structure_metrics and not self.structures_root.exists():
+            raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
 
         if not self.data_dict_path.exists():
             raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
@@ -420,6 +468,30 @@ class MaisiTestingConfig:
 
         if self.lpips_net not in {"alex", "vgg", "squeeze"}:
             raise ValueError(f"`lpips_net` must be one of: 'alex', 'vgg', 'squeeze'. Got {self.lpips_net}")
+
+        if len(self.structure_labels) == 0:
+            raise ValueError("`structure_labels` cannot be empty")
+
+        if any(label < 0 for label in self.structure_labels):
+            raise ValueError(f"`structure_labels` must be non-negative. Got {self.structure_labels}")
+
+        if self.structure_registration_iterations < 1:
+            raise ValueError("`structure_registration_iterations` must be at least 1")
+
+        if self.structure_registration_sigma < 0:
+            raise ValueError("`structure_registration_sigma` must be non-negative")
+
+        if len(self.structure_registration_shrink_factors) != len(self.structure_registration_smoothing_sigmas):
+            raise ValueError(
+                "`structure_registration_shrink_factors` and "
+                "`structure_registration_smoothing_sigmas` must have the same length"
+            )
+
+        if any(value <= 1 for value in self.structure_registration_shrink_factors):
+            raise ValueError("All `structure_registration_shrink_factors` values must be greater than 1")
+
+        if any(value < 0 for value in self.structure_registration_smoothing_sigmas):
+            raise ValueError("All `structure_registration_smoothing_sigmas` values must be non-negative")
 
     def _set_default_vae_config(self) -> None:
         """

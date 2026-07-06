@@ -89,6 +89,20 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--no-structure-metrics",
+        action="store_true",
+        help="Disable structure metric calculation during evaluation",
+    )
+
+    parser.add_argument(
+        "--structure-labels",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Structure labels to evaluate. Defaults to 1 2 3 4 5",
+    )
+
+    parser.add_argument(
         "--generated-ct-dir",
         type=Path,
         default=None,
@@ -107,6 +121,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional override for metrics output directory",
+    )
+
+    parser.add_argument(
+        "--structures-root",
+        type=Path,
+        default=None,
+        help="Optional override for original structure label-map directory",
     )
 
     return parser.parse_args()
@@ -143,7 +164,11 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "evaluation_split": args.evaluation_split,
         "validation_fold": args.validation_fold,
         "use_lpips": not args.no_lpips,
+        "use_structure_metrics": not args.no_structure_metrics,
     }
+
+    if args.structure_labels is not None:
+        config_kwargs["structure_labels"] = args.structure_labels
 
     if args.generated_ct_dir is not None:
         config_kwargs["generated_ct_dir"] = args.generated_ct_dir
@@ -153,6 +178,9 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     if args.metrics_dir is not None:
         config_kwargs["metrics_dir"] = args.metrics_dir
+
+    if args.structures_root is not None:
+        config_kwargs["structures_root"] = args.structures_root
 
     config = MaisiTestingConfig(**config_kwargs)
 

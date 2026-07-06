@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.helpers import _clean_pipeline_memory
 from src.pipeline.inference.encode_latents import load_vae_model
 
 
@@ -347,3 +348,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
 
                 save_path = patient_dir / f"{patient_id}_gen_{variant_idx}.pt"
                 torch.save(reconstructed_ct[0, ...].cpu(), save_path)
+
+    del loader, rflow_model, scheduler, vae_model
+    del class_labels, condition_latent, reconstructed_ct, spacing_tensor, z_t
+    _clean_pipeline_memory()
