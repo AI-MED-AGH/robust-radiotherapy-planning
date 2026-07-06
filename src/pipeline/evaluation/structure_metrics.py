@@ -272,8 +272,8 @@ def calculate_structure_similarity_metrics(
 
             with torch.inference_mode():
                 for label in config.structure_labels:
-                    # Warp one planning label at a time. 
-                    # Only the current predicted/reference masks are moved to metric_device, 
+                    # Warp one planning label at a time.
+                    # Only the current predicted/reference masks are moved to metric_device,
                     # so CUDA sees small boolean masks rather than full CT caches
                     pred_mask = _warp_planning_mask_to_generated_ct(
                         planning_mask=current_planning_masks[label],
