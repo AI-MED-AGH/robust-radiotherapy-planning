@@ -8,6 +8,8 @@ from src.pipeline.evaluation.metrics import evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
 
+PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "all"]
+
 
 def parse_args() -> argparse.Namespace:
     """
@@ -188,11 +190,16 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
 
 def run_stage(
-    stage: Literal["prepare", "encode", "generate", "evaluate", "all"],
+    stage: PipelineStage,
     config: MaisiTestingConfig,
 ) -> None:
     """
     Run one selected MAISI testing pipeline stage.
+
+    Each stage entry point clears only the output directory it owns before
+    saving new results. This keeps single-stage runs usable: inputs produced by
+    earlier stages are preserved, while stale outputs for the selected stage are
+    removed by the function that writes them.
 
     Supported stages:
     - prepare: preprocess test CTs
@@ -203,7 +210,7 @@ def run_stage(
 
     Parameters
     ----------
-    stage : Literal["prepare", "encode", "generate", "evaluate", "all"]
+    stage : PipelineStage
         Pipeline stage to run.
 
     config : MaisiTestingConfig

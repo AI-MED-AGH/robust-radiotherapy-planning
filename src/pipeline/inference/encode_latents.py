@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from src.data_utils import LoadProcessedTensord, sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _clean_pipeline_memory
 
 
@@ -170,6 +171,7 @@ def encode_latents(config: MaisiTestingConfig) -> None:
     Encode processed planning CTs into latent representations using MAISI VAE.
 
     This function:
+    - clears `config.latent_ct_dir`
     - loads the pretrained MAISI VAE
     - loads processed planning CT tensors from `config.processed_ct_dir`
     - applies sliding-window VAE encoding
@@ -199,11 +201,14 @@ def encode_latents(config: MaisiTestingConfig) -> None:
 
     RuntimeError
         If the VAE checkpoint is incompatible with the VAE config.
+
+    OSError
+        If the latent CT output directory cannot be cleared.
     """
 
     device = torch.device(config.device)
 
-    config.latent_ct_dir.mkdir(parents=True, exist_ok=True)
+    clear_directory_contents(config.latent_ct_dir)
 
     vae_model = load_vae_model(
         config=config,

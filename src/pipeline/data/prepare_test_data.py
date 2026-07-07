@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _extract_all_ct_paths
 
 
@@ -149,6 +150,7 @@ def prepare_test_data(
     - creates or loads the longitudinal CT train/validation/test split
     - selects the configured test or validation split
     - extracts all CTs from the selected split
+    - clears config.processed_ct_dir
     - preprocesses all CTs
     - saves processed CT tensors to config.processed_ct_dir
 
@@ -192,7 +194,12 @@ def prepare_test_data(
 
     FileNotFoundError
         If required CT files do not exist.
+
+    OSError
+        If the processed CT output directory cannot be cleared.
     """
+
+    clear_directory_contents(config.processed_ct_dir)
 
     data_dict = create_data_split_dict(
         seed=seed,

@@ -8,6 +8,7 @@ from src.pipeline.evaluation.image_metrics import (
     calculate_similarity_metrics,
 )
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
+from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import (
     _build_lpips_model,
     _clean_pipeline_memory,
@@ -167,6 +168,9 @@ def evaluate_generated_cts(
     2. generated_pairwise_variety_metrics.csv
        Generated CT variants compared with each other.
 
+    The metrics output directory is cleared before new CSV files are written.
+    Generated CTs and processed reference CTs are left untouched.
+
     The goal is to check:
     - whether generated CTs are similar to real CTs
     - whether generated variants are diverse relative to each other
@@ -186,7 +190,12 @@ def evaluate_generated_cts(
 
     ValueError
         If no valid generated-vs-real comparisons can be calculated.
+
+    OSError
+        If the metrics output directory cannot be cleared.
     """
+
+    clear_directory_contents(config.metrics_dir)
 
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
