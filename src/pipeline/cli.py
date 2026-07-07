@@ -210,7 +210,7 @@ def run_stage(
 
     Parameters
     ----------
-    stage : Literal["prepare", "encode", "generate", "evaluate", "all"]
+    stage : PipelineStage
         Pipeline stage to run.
 
     config : MaisiTestingConfig
