@@ -18,6 +18,7 @@ from src.pipeline.helpers.helpers import (
     _label_to_binary_mask,
     _load_hu_tensor,
     _load_structure_label_map,
+    _normalised_cache_key,
     _structure_path_for_ct,
     _StructureRegistrationResult,
     _surface_distances,
@@ -27,17 +28,6 @@ from src.pipeline.helpers.helpers import (
 logger = logging.getLogger(__name__)
 
 WarpedStructureMaskCache = dict[Path, dict[int, torch.Tensor]]
-
-
-def _normalised_cache_key(path: Path) -> str:
-    """Return a stable filename key for persisted warped-mask caches."""
-
-    name = path.name
-    for suffix in (".nii.gz", ".nii", ".pt"):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-
-    return path.stem
 
 
 def warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_path: Path) -> Path:
@@ -215,13 +205,11 @@ def hausdorff_and_hd95(
         If the masks have different shapes.
     """
 
-    # Surface extraction and nearest-neighbor distance search happen once
     distances = _surface_distances(pred, ref, spacing)
 
     if isinstance(distances, float):
         return distances, distances
 
-    # Read HD and HD95 from the shared distance tensor
     return float(distances.max().item()), float(torch.quantile(distances, 0.95).item())
 
 
@@ -417,16 +405,16 @@ def calculate_structure_similarity_metrics(
                     for ref_path, ref_label_map in current_ref_label_maps.items():
                         ref_structure_path = _structure_path_for_ct(ref_path, config)
                         ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
-                        if pred_mask.shape != ref_mask.shape:
+                        try:
+                            dice = dice_coefficient(pred_mask, ref_mask)
+                            hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
+                        except ValueError as exc:
                             warnings.append(
-                                "Skipping structure shape mismatch for "
-                                f"{current_patient_id}, label {label}: "
-                                f"{tuple(pred_mask.shape)} vs {tuple(ref_mask.shape)}"
+                                f"Skipping invalid structure masks for {current_patient_id}, label {label}: {exc}"
                             )
                             del ref_mask
                             continue
 
-                        hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
                         rows.append(
                             {
                                 "patient_id": current_patient_id,
@@ -436,7 +424,7 @@ def calculate_structure_similarity_metrics(
                                 "planning_structure_path": str(current_planning_structure_path),
                                 "reference_structure_path": str(ref_structure_path),
                                 "structure_label": label,
-                                "dice": dice_coefficient(pred_mask, ref_mask),
+                                "dice": dice,
                                 "hd": hd,
                                 "hd95": hd95_value,
                             }

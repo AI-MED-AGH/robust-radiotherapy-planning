@@ -1,10 +1,12 @@
 import gc
 import logging
 from dataclasses import dataclass
+from glob import glob
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import numpy as np
+import pandas as pd
 import SimpleITK as sitk
 import torch
 import torch.nn.functional as F
@@ -20,6 +22,12 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.evaluation.dose_metrics import _DoseComparisonData, load_dose_distribution
+from src.pipeline.evaluation.structure_metrics import (
+    WarpedStructureMaskCache,
+    load_warped_structure_masks,
+    save_warped_structure_masks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -971,6 +979,34 @@ def _surface_distances(
     return distances
 
 
+def _normalised_cache_key(path: Path) -> str:
+    """
+    Return an extension-independent filename key for persisted caches.
+
+    Cache files are keyed by the source image/tensor filename, but persisted
+    cache paths add their own `.pt` suffix. This helper strips common source
+    suffixes, including the compound `.nii.gz` suffix, so equivalent image keys
+    are stable across NIfTI and tensor inputs.
+
+    Parameters
+    ----------
+    path : Path
+        Source image, tensor, or cache path.
+
+    Returns
+    -------
+    key : str
+        Filename without `.nii.gz`, `.nii`, or `.pt`.
+    """
+
+    name = path.name
+    for suffix in (".nii.gz", ".nii", ".pt"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+
+    return path.stem
+
+
 def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:
     """
     Convert a pipeline tensor to a SimpleITK image.
@@ -1348,4 +1384,844 @@ def _calculate_structure_registration_result(
         gen_ct=gen_ct,
         transform=transform,
         info_message=f"Generated structure DVF for {patient_id}: planning -> {gen_path.name}",
+    )
+
+
+def _normalised_image_key(path: Path) -> str:
+    """
+    Return a filename key independent of common medical-image extensions.
+
+    Parameters
+    ----------
+    path : Path
+        Dose or structure file path.
+
+    Returns
+    -------
+    key : str
+        Filename without `.nii.gz`, `.nii`, or `.pt` suffix.
+    """
+
+    name = path.name
+    for suffix in (".nii.gz", ".nii", ".pt"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def _structure_path_for_dose(dose_path: Path, config: MaisiTestingConfig) -> Path:
+    """
+    Resolve the structure label map corresponding to a dose file.
+
+    Parameters
+    ----------
+    dose_path : Path
+        Dose file whose patient and fraction identify the structure label map.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing `structures_root`.
+
+    Returns
+    -------
+    structure_path : Path
+        Expected NIfTI label-map path for the same patient/fraction.
+    """
+
+    patient_id = _extract_patient_id(dose_path)
+    return config.structures_root / patient_id / f"{_normalised_image_key(dose_path)}.nii.gz"
+
+
+def _get_dose_transform(config: MaisiTestingConfig) -> Compose:
+    """
+    Create the geometric preprocessing transform for NIfTI dose maps.
+
+    The transform mirrors the geometric part of CT preprocessing and structure
+    preprocessing so dose, CT, and label tensors share the configured target
+    grid. Dose values are kept in physical units and are not intensity-scaled.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `target_image_size`.
+
+    Returns
+    -------
+    transform : Compose
+        MONAI dictionary transform that returns a float dose tensor.
+    """
+
+    return Compose(
+        [
+            LoadImaged(keys="dose"),
+            EnsureChannelFirstd(keys="dose"),
+            Orientationd(keys="dose", axcodes="RAS", labels=None),
+            SpatialPadd(
+                keys="dose",
+                spatial_size=config.target_image_size,
+                mode="constant",
+                constant_values=0,
+            ),
+            CenterSpatialCropd(keys="dose", roi_size=config.target_image_size),
+            EnsureTyped(keys="dose", dtype=torch.float32),
+        ]
+    )
+
+
+def _load_nifti_dose(path: Path, transform: Compose) -> torch.Tensor:
+    """
+    Load and geometrically align one NIfTI dose map.
+
+    Parameters
+    ----------
+    path : Path
+        NIfTI dose file.
+
+    transform : Compose
+        Dose preprocessing transform returned by `_get_dose_transform`.
+
+    Returns
+    -------
+    dose : torch.Tensor
+        CPU float tensor with shape matching the pipeline target grid.
+    """
+
+    transformed = transform({"dose": str(path)})
+    dose_meta: MetaTensor = transformed["dose"]
+    return dose_meta.as_tensor().detach().cpu()[0].float()
+
+
+def _dose_volume_histogram_from_values(structure_dose: torch.Tensor, bin_width: float) -> pd.DataFrame:
+    """
+    Calculate a cumulative DVH from pre-selected structure dose values.
+
+    This helper assumes shape/device validation and mask selection have already
+    happened in the caller. It is used by the evaluator to avoid rebuilding the
+    same masked dose vector for every dose metric.
+
+    Parameters
+    ----------
+    structure_dose : torch.Tensor
+        One-dimensional tensor containing dose values inside the evaluated
+        structure.
+
+    bin_width : float
+        DVH dose-bin width in Gy. The caller is responsible for ensuring this
+        is positive.
+
+    Returns
+    -------
+    dvh : pd.DataFrame
+        DataFrame with `dose_gy` and cumulative `volume_percent` columns.
+        Empty inputs return an empty DataFrame with those columns.
+    """
+
+    if structure_dose.numel() == 0:
+        return pd.DataFrame(columns=["dose_gy", "volume_percent"])
+
+    max_dose = float(structure_dose.max().item())
+    bins = torch.arange(0.0, max_dose + bin_width, bin_width, dtype=torch.float32, device=structure_dose.device)
+    sorted_dose = torch.sort(structure_dose).values
+    first_ge_indices = torch.searchsorted(sorted_dose, bins, right=False)
+    volume_percent = (structure_dose.numel() - first_ge_indices).float() / structure_dose.numel() * 100.0
+
+    return pd.DataFrame(
+        {
+            "dose_gy": bins.detach().cpu().numpy(),
+            "volume_percent": volume_percent.detach().cpu().numpy(),
+        }
+    )
+
+
+def _masked_dose_values(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> torch.Tensor:
+    """
+    Return dose values inside a mask after one shape/device normalization.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        3D dose map.
+
+    mask : torch.Tensor | np.ndarray
+        Binary mask selecting the evaluated target/OAR volume.
+
+    Returns
+    -------
+    values : torch.Tensor
+        One-dimensional tensor of dose values where `mask` is foreground.
+
+    Raises
+    ------
+    ValueError
+        If `dose` and `mask` have different shapes.
+    """
+
+    dose_t = _as_metric_tensor(dose)
+    mask_t = torch.as_tensor(mask, device=dose_t.device).bool()
+
+    if dose_t.shape != mask_t.shape:
+        raise ValueError(f"Dose and mask must have the same shape. Got {tuple(dose_t.shape)} and {tuple(mask_t.shape)}")
+
+    return dose_t[mask_t]
+
+
+def _dose_at_volume_from_values(structure_dose: torch.Tensor, volume_percent: float) -> float:
+    """
+    Calculate Dx from pre-selected structure dose values.
+
+    Parameters
+    ----------
+    structure_dose : torch.Tensor
+        One-dimensional tensor containing dose values inside the evaluated
+        structure.
+
+    volume_percent : float
+        Percent volume used by the Dx definition. The caller is responsible
+        for validating that it lies in `[0, 100]`.
+
+    Returns
+    -------
+    dose_value : float
+        Dose value in the same units as `structure_dose`. Empty inputs return
+        NaN.
+    """
+
+    if structure_dose.numel() == 0:
+        return float("nan")
+
+    quantile = torch.as_tensor(
+        (100.0 - volume_percent) / 100.0, dtype=structure_dose.dtype, device=structure_dose.device
+    )
+    return float(torch.quantile(structure_dose, quantile).item())
+
+
+def _masked_error_metrics(
+    pred_dose: torch.Tensor,
+    ref_dose: torch.Tensor,
+    mask: torch.Tensor,
+) -> tuple[float, float]:
+    """
+    Calculate masked voxel MAE and RMSE between two dose distributions.
+
+    Parameters
+    ----------
+    pred_dose : torch.Tensor
+        Predicted dose tensor already on the metric device.
+
+    ref_dose : torch.Tensor
+        Reference dose tensor already on the metric device.
+
+    mask : torch.Tensor
+        Boolean mask already on the metric device.
+
+    Returns
+    -------
+    metrics : tuple[float, float]
+        Pair containing masked voxel MAE and RMSE. Empty masks return
+        `(nan, nan)`.
+    """
+
+    mask_t = mask.bool()
+    return _masked_error_metrics_from_values(pred_dose[mask_t], ref_dose[mask_t])
+
+
+def _masked_error_metrics_from_values(pred_values: torch.Tensor, ref_values: torch.Tensor) -> tuple[float, float]:
+    """
+    Calculate MAE and RMSE from already-masked predicted/reference values.
+
+    Parameters
+    ----------
+    pred_values : torch.Tensor
+        Predicted dose values selected by the comparison mask.
+
+    ref_values : torch.Tensor
+        Reference dose values selected by the same comparison mask.
+
+    Returns
+    -------
+    metrics : tuple[float, float]
+        Pair containing masked voxel MAE and RMSE. Empty inputs return
+        `(nan, nan)`.
+    """
+
+    if pred_values.numel() == 0:
+        return float("nan"), float("nan")
+
+    error = pred_values - ref_values
+    mae = float(torch.mean(torch.abs(error)).item())
+    rmse = float(torch.sqrt(torch.mean(error.square())).item())
+    return mae, rmse
+
+
+def _metric_row(
+    metric_name: str,
+    pred_value: float,
+    ref_value: float,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Build one predicted/reference metric comparison row.
+
+    Parameters
+    ----------
+    metric_name : str
+        Name of the metric represented by the row.
+
+    pred_value : float
+        Metric value measured on the predicted dose.
+
+    ref_value : float
+        Metric value measured on the reference dose.
+
+    base : dict[str, Any]
+        Shared row metadata such as patient ID and structure label.
+
+    Returns
+    -------
+    row : dict[str, Any]
+        CSV-ready metric row containing values and signed/absolute
+        differences.
+    """
+
+    return {
+        **base,
+        "metric": metric_name,
+        "predicted_value": pred_value,
+        "reference_value": ref_value,
+        "difference": pred_value - ref_value,
+        "absolute_difference": abs(pred_value - ref_value),
+    }
+
+
+def _reference_lookup(paths: list[Path]) -> dict[str, Path]:
+    """
+    Build a dose lookup keyed by extension-independent filename.
+
+    Parameters
+    ----------
+    paths : list[Path]
+        Reference dose paths for one patient.
+
+    Returns
+    -------
+    lookup : dict[str, Path]
+        Mapping from normalized dose filename to path.
+    """
+
+    return {_normalised_image_key(path): path for path in paths}
+
+
+def _generated_ct_lookup(config: MaisiTestingConfig) -> dict[str, Path]:
+    """
+    Build a lookup for generated CT tensors keyed like predicted dose files.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `generated_ct_dir`.
+
+    Returns
+    -------
+    lookup : dict[str, Path]
+        Mapping from normalized generated CT filename to path. An empty lookup
+        is returned when the generated CT directory is not available.
+    """
+
+    if not config.generated_ct_dir.exists():
+        return {}
+
+    return {
+        _normalised_image_key(Path(path)): Path(path)
+        for path in glob.glob(str(config.generated_ct_dir / "**" / "*.pt"), recursive=True)
+    }
+
+
+def _planning_ct_path_for_patient(patient_id: str, config: MaisiTestingConfig) -> Path | None:
+    """
+    Resolve the processed planning CT tensor for a patient.
+
+    Parameters
+    ----------
+    patient_id : str
+        Patient identifier.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing `processed_ct_dir`.
+
+    Returns
+    -------
+    path : Path | None
+        Planning CT tensor path, or `None` when it cannot be found.
+    """
+
+    candidates = sorted(
+        Path(path)
+        for path in glob.glob(str(config.processed_ct_dir / patient_id / "*.pt"), recursive=True)
+        if _is_planning_ct_path(path)
+    )
+
+    if len(candidates) == 0:
+        candidates = sorted(
+            Path(path)
+            for path in glob.glob(str(config.processed_ct_dir / "**" / "*.pt"), recursive=True)
+            if _extract_patient_id(path) == patient_id and _is_planning_ct_path(path)
+        )
+
+    if len(candidates) == 0:
+        return None
+
+    return candidates[0]
+
+
+def _load_dose_distribution(path: Path, transform: Compose) -> torch.Tensor:
+    """
+    Load a 3D dose distribution from either a NIfTI image or a saved tensor.
+
+    Dose values are assumed to be stored in physical dose units, typically Gy.
+    Unlike CT loading, this function does not normalize or convert intensity
+    ranges.
+
+    Parameters
+    ----------
+    path : Path
+        Dose file path. Supported suffixes are `.nii`, `.nii.gz`, and `.pt`.
+
+    transform : Compose
+        MONAI transform used for NIfTI dose files. Tensor files are loaded
+        directly and do not use this transform.
+
+    Returns
+    -------
+    dose : torch.Tensor
+        CPU float 3D dose tensor.
+
+    Raises
+    ------
+    ValueError
+        If the file suffix is unsupported, the tensor is not 3D, the tensor is
+        empty, or dose values contain NaN/inf.
+    """
+
+    if path.name.endswith(".pt"):
+        dose = _load_tensor(path).float()
+    elif path.name.endswith((".nii", ".nii.gz")):
+        dose = _load_nifti_dose(path, transform)
+    else:
+        raise ValueError(f"Unsupported dose file extension: {path}")
+
+    if dose.numel() == 0:
+        raise ValueError(f"Dose distribution is empty: {path}")
+
+    if dose.ndim != 3:
+        raise ValueError(f"Dose distribution must be 3D. Got {tuple(dose.shape)} for {path}")
+
+    if not torch.isfinite(dose).all():
+        raise ValueError(f"Dose distribution contains NaN or infinite values: {path}")
+
+    return dose
+
+
+def _collect_dose_distributions(dose_dir: Path) -> dict[str, list[Path]]:
+    """
+    Collect dose distribution files grouped by patient ID.
+
+    Supported files are `.nii`, `.nii.gz`, and `.pt`, allowing the same
+    evaluator to compare raw converted RTDOSE files and model-produced tensors.
+
+    Parameters
+    ----------
+    dose_dir : Path
+        Directory searched recursively for dose files.
+
+    Returns
+    -------
+    doses : dict[str, list[Path]]
+        Dose paths grouped by patient ID.
+
+    Raises
+    ------
+    FileNotFoundError
+        If `dose_dir` does not exist.
+
+    ValueError
+        If no supported dose files are found.
+    """
+
+    if not dose_dir.exists():
+        raise FileNotFoundError(f"Dose directory does not exist: {dose_dir}")
+
+    paths: list[Path] = []
+    for pattern in ("*.nii", "*.nii.gz", "*.pt"):
+        paths.extend(Path(path) for path in glob.glob(str(dose_dir / "**" / pattern), recursive=True))
+
+    paths = sorted(set(paths))
+    if len(paths) == 0:
+        raise ValueError(f"No dose files found in: {dose_dir}")
+
+    doses: dict[str, list[Path]] = {}
+    for path in paths:
+        doses.setdefault(_extract_patient_id(path), []).append(path)
+
+    return doses
+
+
+def _maximum_dose_from_values(structure_dose: torch.Tensor) -> float:
+    """
+    Calculate maximum dose from pre-selected structure dose values.
+
+    Parameters
+    ----------
+    structure_dose : torch.Tensor
+        One-dimensional tensor containing dose values inside the evaluated
+        structure.
+
+    Returns
+    -------
+    max_value : float
+        Maximum selected dose. Empty inputs return NaN.
+    """
+
+    if structure_dose.numel() == 0:
+        return float("nan")
+
+    return float(structure_dose.max().item())
+
+
+def _mean_dose_from_values(structure_dose: torch.Tensor) -> float:
+    """
+    Calculate mean dose from pre-selected structure dose values.
+
+    Parameters
+    ----------
+    structure_dose : torch.Tensor
+        One-dimensional tensor containing dose values inside the evaluated
+        structure.
+
+    Returns
+    -------
+    mean_value : float
+        Mean selected dose. Empty inputs return NaN.
+    """
+
+    if structure_dose.numel() == 0:
+        return float("nan")
+
+    return float(structure_dose.mean().item())
+
+
+def _volume_at_dose_from_values(structure_dose: torch.Tensor, dose_threshold: float) -> float:
+    """
+    Calculate Vx from pre-selected structure dose values.
+
+    Parameters
+    ----------
+    structure_dose : torch.Tensor
+        One-dimensional tensor containing dose values inside the evaluated
+        structure.
+
+    dose_threshold : float
+        Dose threshold in the same units as `structure_dose`, usually Gy.
+
+    Returns
+    -------
+    volume_percent : float
+        Percent of selected voxels receiving at least `dose_threshold`. Empty
+        inputs return NaN.
+    """
+
+    if structure_dose.numel() == 0:
+        return float("nan")
+
+    return float((structure_dose >= dose_threshold).float().mean().item() * 100.0)
+
+
+def _warp_planning_masks_for_predicted_dose(
+    pred_path: Path,
+    pred_dose: torch.Tensor,
+    patient_id: str,
+    generated_ct_lookup: dict[str, Path],
+    structure_transform: Compose,
+    planning_ct_cache: dict[str, torch.Tensor],
+    planning_label_map_cache: dict[str, torch.Tensor],
+    generated_mask_cache: WarpedStructureMaskCache,
+    config: MaisiTestingConfig,
+) -> tuple[dict[int, torch.Tensor] | None, str, str | None, str | None]:
+    """
+    Warp planning structures into generated-dose space when possible.
+
+    Predicted doses produced from generated CTs should be evaluated with masks
+    on that generated anatomy. This helper resolves the matching generated CT,
+    registers the planning CT to it, and warps planning structure masks through
+    the resulting DVF. If the generated CT or planning inputs cannot be
+    resolved, callers can fall back to same-grid reference masks.
+
+    Parameters
+    ----------
+    pred_path : Path
+        Predicted dose path.
+
+    pred_dose : torch.Tensor
+        Predicted dose tensor on CPU.
+
+    patient_id : str
+        Patient identifier.
+
+    generated_ct_lookup : dict[str, Path]
+        Generated CT paths keyed by normalized filename.
+
+    structure_transform : Compose
+        Preprocessing transform for structure label maps.
+
+    planning_ct_cache : dict[str, torch.Tensor]
+        CPU cache of processed planning CT tensors keyed by patient ID.
+
+    planning_label_map_cache : dict[str, torch.Tensor]
+        CPU cache of planning structure label maps keyed by patient ID.
+
+    generated_mask_cache : WarpedStructureMaskCache
+        CPU cache of warped planning masks keyed by generated CT path.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing CT, structure, and registration
+        settings.
+
+    Returns
+    -------
+    result : tuple[dict[int, torch.Tensor] | None, str, str | None, str | None]
+        Warped masks keyed by structure label, a source description, an
+        optional info message, and an optional warning. `None` masks mean no
+        generated-space structure could be produced.
+    """
+
+    if not config.use_dose_structure_warping:
+        return None, "reference_structure_same_grid", None, None
+
+    gen_ct_path = generated_ct_lookup.get(_normalised_image_key(pred_path))
+    if gen_ct_path is None:
+        return (
+            None,
+            "reference_structure_same_grid",
+            None,
+            f"Using reference-space dose masks for {pred_path}: no matching generated CT found",
+        )
+
+    cached_masks = generated_mask_cache.get(gen_ct_path)
+    if cached_masks is not None:
+        return cached_masks, "warped_planning_structure_to_generated_ct", None, None
+
+    persisted_masks = load_warped_structure_masks(config, gen_ct_path)
+    if persisted_masks is not None:
+        generated_mask_cache[gen_ct_path] = persisted_masks
+        return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
+
+    planning_ct_path = _planning_ct_path_for_patient(patient_id, config)
+    if planning_ct_path is None:
+        return (
+            None,
+            "reference_structure_same_grid",
+            None,
+            f"Using reference-space dose masks for {pred_path}: no processed planning CT found for {patient_id}",
+        )
+
+    planning_structure_path = _structure_path_for_ct(planning_ct_path, config)
+    if not planning_structure_path.exists():
+        return (
+            None,
+            "reference_structure_same_grid",
+            None,
+            f"Using reference-space dose masks for {pred_path}: missing {planning_structure_path}",
+        )
+
+    cpu_device = torch.device("cpu")
+    planning_ct = planning_ct_cache.get(patient_id)
+    if planning_ct is None:
+        planning_ct = _load_hu_tensor(planning_ct_path, config=config, device=cpu_device)
+        planning_ct_cache[patient_id] = planning_ct
+
+    planning_label_map = planning_label_map_cache.get(patient_id)
+    if planning_label_map is None:
+        planning_label_map = _load_structure_label_map(planning_structure_path, structure_transform)
+        planning_label_map_cache[patient_id] = planning_label_map
+
+    result = _calculate_structure_registration_result(
+        gen_path=gen_ct_path,
+        patient_id=patient_id,
+        planning_ct=planning_ct,
+        config=config,
+    )
+
+    if result.warning is not None:
+        return None, "reference_structure_same_grid", None, result.warning
+
+    if result.gen_ct is None or result.transform is None:
+        return (
+            None,
+            "reference_structure_same_grid",
+            None,
+            f"Using reference-space dose masks for {pred_path}: generated CT registration failed",
+        )
+
+    if result.gen_ct.shape != pred_dose.shape:
+        return (
+            None,
+            "reference_structure_same_grid",
+            None,
+            "Using reference-space dose masks for "
+            f"{pred_path}: generated CT {tuple(result.gen_ct.shape)} vs dose {tuple(pred_dose.shape)}",
+        )
+
+    warped_masks: dict[int, torch.Tensor] = {}
+    for label in config.structure_labels:
+        # Warp one planning label at a time with nearest-neighbor sampling so
+        # target/OAR identities stay categorical after DVF resampling.
+        warped_masks[label] = _warp_planning_mask_to_generated_ct(
+            planning_mask=_label_to_binary_mask(planning_label_map, label),
+            generated_ct=result.gen_ct,
+            transform=result.transform,
+            config=config,
+        )
+
+    generated_mask_cache[gen_ct_path] = warped_masks
+    save_warped_structure_masks(config, gen_ct_path, warped_masks)
+
+    return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
+
+
+def _load_dose_comparison_data(
+    pred_path: Path,
+    ref_path: Path,
+    patient_id: str,
+    dose_transform: Compose,
+    structure_transform: Compose,
+    generated_ct_lookup: dict[str, Path],
+    reference_dose_cache: dict[Path, torch.Tensor],
+    structure_cache: dict[Path, torch.Tensor | None],
+    planning_ct_cache: dict[str, torch.Tensor],
+    planning_label_map_cache: dict[str, torch.Tensor],
+    generated_mask_cache: WarpedStructureMaskCache,
+    config: MaisiTestingConfig,
+) -> _DoseComparisonData:
+    """
+    Load CPU data for one dose comparison and reuse patient-level caches.
+
+    Predicted dose files are unique per comparison and are loaded on demand.
+    Reference dose and reference structure files can be reused across multiple
+    predictions for the same patient, so they are cached on CPU. Returning a
+    structured result instead of raising for expected data issues lets the
+    outer evaluator preserve the skip-and-continue behavior used elsewhere in
+    the pipeline.
+
+    Parameters
+    ----------
+    pred_path : Path
+        Predicted dose distribution path.
+
+    ref_path : Path
+        Matching reference dose distribution path.
+
+    patient_id : str
+        Patient identifier used in diagnostic messages.
+
+    dose_transform : Compose
+        Preprocessing transform for NIfTI dose maps.
+
+    structure_transform : Compose
+        Preprocessing transform for structure label maps.
+
+    generated_ct_lookup : dict[str, Path]
+        Generated CT tensor paths keyed by normalized filename. Used to warp
+        planning structures into generated-dose space.
+
+    reference_dose_cache : dict[Path, torch.Tensor]
+        CPU cache of reference dose tensors for the current patient.
+
+    structure_cache : dict[Path, torch.Tensor | None]
+        CPU cache of reference structure label maps for the current patient.
+        Missing or shape-mismatched structures are cached as `None`.
+
+    planning_ct_cache : dict[str, torch.Tensor]
+        CPU cache of planning CT tensors keyed by patient ID.
+
+    planning_label_map_cache : dict[str, torch.Tensor]
+        CPU cache of planning structure label maps keyed by patient ID.
+
+    generated_mask_cache : WarpedStructureMaskCache
+        CPU cache of DVF-warped generated-space masks keyed by generated CT.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing paths and preprocessing settings.
+
+    Returns
+    -------
+    result : _DoseComparisonData
+        CPU-loaded comparison data, or a result containing a warning when the
+        comparison should be skipped.
+    """
+
+    pred_dose = load_dose_distribution(pred_path, dose_transform)
+    ref_dose = reference_dose_cache.get(ref_path)
+    if ref_dose is None:
+        ref_dose = load_dose_distribution(ref_path, dose_transform)
+        reference_dose_cache[ref_path] = ref_dose
+
+    if pred_dose.shape != ref_dose.shape:
+        return _DoseComparisonData(
+            pred_path=pred_path,
+            ref_path=ref_path,
+            pred_dose=None,
+            ref_dose=None,
+            ref_label_map=None,
+            pred_masks=None,
+            pred_structure_source="none",
+            ref_structure_source="none",
+            warning=(
+                "Skipping dose shape mismatch for "
+                f"{patient_id}: {pred_path.name} {tuple(pred_dose.shape)} vs "
+                f"{ref_path.name} {tuple(ref_dose.shape)}"
+            ),
+        )
+
+    if ref_path not in structure_cache:
+        structure_path = _structure_path_for_dose(ref_path, config)
+        if not structure_path.exists():
+            structure_cache[ref_path] = None
+            structure_warning = f"Skipping structure-specific dose metrics for {patient_id}: missing {structure_path}"
+        else:
+            label_map = _load_structure_label_map(structure_path, structure_transform)
+            if label_map.shape != pred_dose.shape:
+                structure_cache[ref_path] = None
+                structure_warning = (
+                    "Skipping structure-specific dose metrics for "
+                    f"{patient_id}: dose {tuple(pred_dose.shape)} vs structures {tuple(label_map.shape)}"
+                )
+            else:
+                structure_cache[ref_path] = label_map
+                structure_warning = None
+    else:
+        structure_warning = None
+
+    pred_masks, pred_structure_source, pred_mask_info, pred_mask_warning = _warp_planning_masks_for_predicted_dose(
+        pred_path=pred_path,
+        pred_dose=pred_dose,
+        patient_id=patient_id,
+        generated_ct_lookup=generated_ct_lookup,
+        structure_transform=structure_transform,
+        planning_ct_cache=planning_ct_cache,
+        planning_label_map_cache=planning_label_map_cache,
+        generated_mask_cache=generated_mask_cache,
+        config=config,
+    )
+
+    nonfatal_warnings = [message for message in (structure_warning, pred_mask_warning) if message is not None]
+
+    return _DoseComparisonData(
+        pred_path=pred_path,
+        ref_path=ref_path,
+        pred_dose=pred_dose,
+        ref_dose=ref_dose,
+        ref_label_map=structure_cache[ref_path],
+        pred_masks=pred_masks,
+        pred_structure_source=pred_structure_source,
+        ref_structure_source="reference_structure",
+        info_message=pred_mask_info,
+        nonfatal_warning="\n".join(nonfatal_warnings) if len(nonfatal_warnings) > 0 else None,
     )
