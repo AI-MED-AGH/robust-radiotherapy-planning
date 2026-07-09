@@ -234,6 +234,8 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
 
     This function:
     - clears `config.generated_ct_dir`
+    - clears `config.warped_structure_cache_dir` because cached masks are tied
+      to the exact generated CT samples
     - loads the VAE decoder
     - loads the rectified flow model
     - loads latent planning CT tensors from `config.latent_ct_dir`
@@ -264,7 +266,8 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         If scheduler config is missing required settings.
 
     OSError
-        If the generated CT output directory cannot be cleared.
+        If the generated CT output directory or warped-structure cache
+        directory cannot be cleared.
     """
 
     device = torch.device(config.device)
@@ -276,6 +279,7 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
         raise ValueError("`config.scheduler_config` must contain 'base_img_size_numel'")
 
     clear_directory_contents(config.generated_ct_dir)
+    clear_directory_contents(config.warped_structure_cache_dir)
 
     vae_model = load_vae_model(config, device)
     rflow_model = load_rflow_model(config, device)

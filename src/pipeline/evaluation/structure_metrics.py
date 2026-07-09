@@ -12,6 +12,7 @@ from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
+    _extract_patient_id,
     _get_structure_label_transform,
     _is_planning_ct_path,
     _label_to_binary_mask,
@@ -24,6 +25,112 @@ from src.pipeline.helpers.helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+WarpedStructureMaskCache = dict[Path, dict[int, torch.Tensor]]
+
+
+def _normalised_cache_key(path: Path) -> str:
+    """Return a stable filename key for persisted warped-mask caches."""
+
+    name = path.name
+    for suffix in (".nii.gz", ".nii", ".pt"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+
+    return path.stem
+
+
+def warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_path: Path) -> Path:
+    """
+    Resolve the persisted warped-mask cache path for one generated CT.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path whose generated-space masks are cached.
+
+    Returns
+    -------
+    path : Path
+        Cache file path for warped masks keyed by structure label.
+    """
+
+    patient_id = _extract_patient_id(generated_ct_path)
+    return config.warped_structure_cache_dir / patient_id / f"{_normalised_cache_key(generated_ct_path)}.pt"
+
+
+def save_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+    masks: dict[int, torch.Tensor],
+) -> None:
+    """
+    Persist generated-space warped structure masks for reuse by dose metrics.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path used as the cache key.
+
+    masks : dict[int, torch.Tensor]
+        CPU or GPU boolean masks keyed by structure label.
+    """
+
+    cache_path = warped_structure_mask_cache_path(config, generated_ct_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({label: mask.detach().cpu().bool() for label, mask in masks.items()}, cache_path)
+
+
+def load_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+) -> dict[int, torch.Tensor] | None:
+    """
+    Load persisted generated-space warped structure masks when available.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path used as the cache key.
+
+    Returns
+    -------
+    masks : dict[int, torch.Tensor] | None
+        CPU boolean masks keyed by structure label, or `None` when no complete
+        cache exists for the configured structure labels.
+    """
+
+    cache_path = warped_structure_mask_cache_path(config, generated_ct_path)
+    if not cache_path.exists():
+        return None
+
+    loaded = torch.load(cache_path, weights_only=True)
+    if not isinstance(loaded, dict):
+        logger.warning("Ignoring invalid warped-structure cache: %s", cache_path)
+        return None
+
+    masks: dict[int, torch.Tensor] = {}
+    for label in config.structure_labels:
+        value = loaded.get(label)
+        if value is None:
+            value = loaded.get(str(label))
+
+        if not isinstance(value, torch.Tensor):
+            logger.warning("Ignoring incomplete warped-structure cache: %s", cache_path)
+            return None
+
+        masks[label] = value.detach().cpu().bool()
+
+    return masks
 
 
 def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
@@ -122,7 +229,8 @@ def calculate_structure_similarity_metrics(
     generated: dict[str, list[Path]],
     originals: dict[str, list[Path]],
     config: MaisiTestingConfig,
-) -> None:
+    warped_mask_cache: WarpedStructureMaskCache | None = None,
+) -> WarpedStructureMaskCache:
     """
     Calculate generated-vs-real structure metrics.
 
@@ -142,6 +250,9 @@ def calculate_structure_similarity_metrics(
         Per-comparison, per-label structure metrics.
     - generated_vs_real_structure_summary.csv
         Patient- and label-level summary statistics.
+    - warped structure mask cache files
+        CPU `.pt` files under `config.warped_structure_cache_dir`, keyed by
+        generated CT, for reuse by dose metrics in later independent runs.
 
     Parameters
     ----------
@@ -157,6 +268,19 @@ def calculate_structure_similarity_metrics(
         Pipeline configuration containing structure labels, spacing,
         registration settings, and output paths.
 
+    warped_mask_cache : WarpedStructureMaskCache | None, optional
+        Optional CPU cache filled with planning masks warped into each
+        generated CT space. Passing this cache lets downstream dose metrics
+        reuse the same generated-space target/OAR masks without repeating DVF
+        registration or mask resampling.
+
+    Returns
+    -------
+    warped_mask_cache : WarpedStructureMaskCache
+        CPU cache of warped generated-space masks keyed by generated CT path.
+        Empty when structure metrics are disabled or no valid registrations
+        are produced.
+
     Raises
     ------
     RuntimeError
@@ -166,7 +290,10 @@ def calculate_structure_similarity_metrics(
 
     if not config.use_structure_metrics:
         logger.info("Skipping structure metrics: disabled by configuration")
-        return
+        return warped_mask_cache if warped_mask_cache is not None else {}
+
+    if warped_mask_cache is None:
+        warped_mask_cache = {}
 
     logger.info(
         "Calculating structure metrics: "
@@ -270,16 +397,22 @@ def calculate_structure_similarity_metrics(
             transform = result.transform
 
             with torch.inference_mode():
+                generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
                 for label in config.structure_labels:
                     # Warp one planning label at a time.
                     # Only the current predicted/reference masks are moved to metric_device,
                     # so CUDA sees small boolean masks rather than full CT caches.
-                    pred_mask = _warp_planning_mask_to_generated_ct(
-                        planning_mask=current_planning_masks[label],
-                        generated_ct=gen_ct,
-                        transform=transform,
-                        config=config,
-                    ).to(metric_device)
+                    pred_mask_cpu = generated_masks.get(label)
+                    if pred_mask_cpu is None:
+                        pred_mask_cpu = _warp_planning_mask_to_generated_ct(
+                            planning_mask=current_planning_masks[label],
+                            generated_ct=gen_ct,
+                            transform=transform,
+                            config=config,
+                        )
+                        generated_masks[label] = pred_mask_cpu
+
+                    pred_mask = pred_mask_cpu.to(metric_device)
 
                     for ref_path, ref_label_map in current_ref_label_maps.items():
                         ref_structure_path = _structure_path_for_ct(ref_path, config)
@@ -308,6 +441,9 @@ def calculate_structure_similarity_metrics(
                                 "hd95": hd95_value,
                             }
                         )
+
+                if all(label in generated_masks for label in config.structure_labels):
+                    save_warped_structure_masks(config, result.gen_path, generated_masks)
 
         if metric_device.type == "cuda" and len(gen_paths) > 1:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
@@ -362,7 +498,7 @@ def calculate_structure_similarity_metrics(
 
     if len(rows) == 0:
         logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
-        return
+        return warped_mask_cache
 
     df = pd.DataFrame(rows)
     metrics_path = config.metrics_dir / "generated_vs_real_structure_metrics.csv"
@@ -375,3 +511,5 @@ def calculate_structure_similarity_metrics(
     summary_path = config.metrics_dir / "generated_vs_real_structure_summary.csv"
     summary.to_csv(summary_path)
     logger.info("Saved structure metric summary: %s", summary_path)
+
+    return warped_mask_cache

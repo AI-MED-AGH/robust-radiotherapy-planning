@@ -37,7 +37,12 @@ def parse_args() -> argparse.Namespace:
         - validation_fold
         - no_validate_paths
         - no_lpips
+        - no_dose_metrics
+        - no_dose_structure_warping
         - generated_ct_dir
+        - predicted_dose_dir
+        - reference_dose_dir
+        - warped_structure_cache_dir
         - processed_ct_dir
         - metrics_dir
     """
@@ -97,6 +102,18 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--no-dose-metrics",
+        action="store_true",
+        help="Disable predicted-vs-reference dose metric calculation during evaluation",
+    )
+
+    parser.add_argument(
+        "--no-dose-structure-warping",
+        action="store_true",
+        help="Disable DVF-based planning structure warping for generated-dose structure metrics",
+    )
+
+    parser.add_argument(
         "--structure-labels",
         type=int,
         nargs="+",
@@ -109,6 +126,57 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional override for generated CT directory",
+    )
+
+    parser.add_argument(
+        "--predicted-dose-dir",
+        type=Path,
+        default=None,
+        help="Optional override for predicted dose directory",
+    )
+
+    parser.add_argument(
+        "--reference-dose-dir",
+        type=Path,
+        default=None,
+        help="Optional override for reference/ground-truth dose directory",
+    )
+
+    parser.add_argument(
+        "--warped-structure-cache-dir",
+        type=Path,
+        default=None,
+        help="Optional override for persisted warped structure mask cache directory",
+    )
+
+    parser.add_argument(
+        "--dose-model-name",
+        type=str,
+        default=None,
+        help="Model or baseline name written to dose metric outputs",
+    )
+
+    parser.add_argument(
+        "--dose-dvh-bin-width",
+        type=float,
+        default=None,
+        help="Dose bin width in Gy for cumulative DVH output",
+    )
+
+    parser.add_argument(
+        "--dose-dx-volume-percents",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Volume percentages for Dx metrics, for example 2 50 95 98",
+    )
+
+    parser.add_argument(
+        "--dose-vx-thresholds",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Dose thresholds in Gy for Vx metrics, for example 5 10 20 30",
     )
 
     parser.add_argument(
@@ -167,6 +235,8 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "validation_fold": args.validation_fold,
         "use_lpips": not args.no_lpips,
         "use_structure_metrics": not args.no_structure_metrics,
+        "use_dose_metrics": not args.no_dose_metrics,
+        "use_dose_structure_warping": not args.no_dose_structure_warping,
     }
 
     if args.structure_labels is not None:
@@ -174,6 +244,27 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     if args.generated_ct_dir is not None:
         config_kwargs["generated_ct_dir"] = args.generated_ct_dir
+
+    if args.predicted_dose_dir is not None:
+        config_kwargs["predicted_dose_dir"] = args.predicted_dose_dir
+
+    if args.reference_dose_dir is not None:
+        config_kwargs["reference_dose_dir"] = args.reference_dose_dir
+
+    if args.warped_structure_cache_dir is not None:
+        config_kwargs["warped_structure_cache_dir"] = args.warped_structure_cache_dir
+
+    if args.dose_model_name is not None:
+        config_kwargs["dose_model_name"] = args.dose_model_name
+
+    if args.dose_dvh_bin_width is not None:
+        config_kwargs["dose_dvh_bin_width"] = args.dose_dvh_bin_width
+
+    if args.dose_dx_volume_percents is not None:
+        config_kwargs["dose_dx_volume_percents"] = args.dose_dx_volume_percents
+
+    if args.dose_vx_thresholds is not None:
+        config_kwargs["dose_vx_thresholds"] = args.dose_vx_thresholds
 
     if args.processed_ct_dir is not None:
         config_kwargs["processed_ct_dir"] = args.processed_ct_dir

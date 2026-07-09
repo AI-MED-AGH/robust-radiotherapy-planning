@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.evaluation.dose_metrics import evaluate_predicted_doses
 from src.pipeline.evaluation.image_metrics import (
     calculate_pairwise_variety_metrics,
     calculate_similarity_metrics,
@@ -217,13 +218,17 @@ def evaluate_generated_cts(
     )
     _clean_pipeline_memory()
 
-    logger.info("Calculating generated-vs-real structure metrics")
-    calculate_structure_similarity_metrics(
-        generated=generated,
-        originals=originals,
-        config=config,
-    )
-    _clean_pipeline_memory()
+    warped_mask_cache = {}
+    if config.use_structure_metrics:
+        logger.info("Calculating generated-vs-real structure metrics")
+        warped_mask_cache = calculate_structure_similarity_metrics(
+            generated=generated,
+            originals=originals,
+            config=config,
+        )
+        _clean_pipeline_memory()
+    else:
+        logger.info("Skipping generated-vs-real structure metrics: disabled by configuration")
 
     logger.info("Calculating generated pairwise variety metrics")
     calculate_pairwise_variety_metrics(
@@ -232,5 +237,12 @@ def evaluate_generated_cts(
         lpips_model=lpips_model,
     )
     _clean_pipeline_memory()
+
+    if config.use_dose_metrics:
+        logger.info("Calculating predicted-vs-reference dose metrics")
+        evaluate_predicted_doses(config, warped_mask_cache=warped_mask_cache)
+        _clean_pipeline_memory()
+    else:
+        logger.info("Skipping predicted-vs-reference dose metrics: disabled by configuration")
 
     logger.info("Finished evaluation")
