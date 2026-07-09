@@ -2090,7 +2090,7 @@ def _warp_planning_masks_for_predicted_dose(
     if cached_masks is not None:
         return cached_masks, "warped_planning_structure_to_generated_ct", None, None
 
-    persisted_masks = load_warped_structure_masks(config, gen_ct_path)
+    persisted_masks = _load_warped_structure_masks(config, gen_ct_path)
     if persisted_masks is not None:
         generated_mask_cache[gen_ct_path] = persisted_masks
         return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
@@ -2163,7 +2163,7 @@ def _warp_planning_masks_for_predicted_dose(
         )
 
     generated_mask_cache[gen_ct_path] = warped_masks
-    save_warped_structure_masks(config, gen_ct_path, warped_masks)
+    _save_warped_structure_masks(config, gen_ct_path, warped_masks)
 
     return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
 
