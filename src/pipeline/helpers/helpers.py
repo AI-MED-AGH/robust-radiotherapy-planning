@@ -1,7 +1,7 @@
 import gc
+import glob
 import logging
 from dataclasses import dataclass
-from glob import glob
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -22,7 +22,7 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.evaluation.dose_metrics import _DoseComparisonData, load_dose_distribution
+from src.pipeline.evaluation.dose_metrics import _DoseComparisonData
 from src.pipeline.evaluation.structure_metrics import (
     WarpedStructureMaskCache,
     load_warped_structure_masks,
@@ -2157,10 +2157,10 @@ def _load_dose_comparison_data(
         comparison should be skipped.
     """
 
-    pred_dose = load_dose_distribution(pred_path, dose_transform)
+    pred_dose = _load_dose_distribution(pred_path, dose_transform)
     ref_dose = reference_dose_cache.get(ref_path)
     if ref_dose is None:
-        ref_dose = load_dose_distribution(ref_path, dose_transform)
+        ref_dose = _load_dose_distribution(ref_path, dose_transform)
         reference_dose_cache[ref_path] = ref_dose
 
     if pred_dose.shape != ref_dose.shape:
