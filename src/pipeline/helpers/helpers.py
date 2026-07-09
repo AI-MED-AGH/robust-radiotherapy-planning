@@ -22,14 +22,10 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.evaluation.dose_metrics import _DoseComparisonData
-from src.pipeline.evaluation.structure_metrics import (
-    WarpedStructureMaskCache,
-    load_warped_structure_masks,
-    save_warped_structure_masks,
-)
 
 logger = logging.getLogger(__name__)
+
+WarpedStructureMaskCache = dict[Path, dict[int, torch.Tensor]]
 
 
 @dataclass
@@ -66,6 +62,29 @@ class _StructureRegistrationResult:
     gen_ct: torch.Tensor | None
     transform: Any | None
     info_message: str | None = None
+    warning: str | None = None
+
+
+@dataclass
+class _DoseComparisonData:
+    """
+    Store CPU-loaded data for one predicted/reference dose comparison.
+
+    Dose maps and structure labels are loaded on CPU because NIfTI decoding and
+    MONAI transforms are CPU-bound. The metric loop moves only the current
+    comparison to the configured metric device, which keeps GPU memory bounded.
+    """
+
+    pred_path: Path
+    ref_path: Path
+    pred_dose: torch.Tensor | None
+    ref_dose: torch.Tensor | None
+    ref_label_map: torch.Tensor | None
+    pred_masks: dict[int, torch.Tensor] | None
+    pred_structure_source: str
+    ref_structure_source: str
+    info_message: str | None = None
+    nonfatal_warning: str | None = None
     warning: str | None = None
 
 
@@ -1007,6 +1026,99 @@ def _normalised_cache_key(path: Path) -> str:
     return path.stem
 
 
+def _warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_path: Path) -> Path:
+    """
+    Resolve the persisted warped-mask cache path for one generated CT.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path whose generated-space masks are cached.
+
+    Returns
+    -------
+    path : Path
+        Cache file path for warped masks keyed by structure label.
+    """
+
+    patient_id = _extract_patient_id(generated_ct_path)
+    return config.warped_structure_cache_dir / patient_id / f"{_normalised_cache_key(generated_ct_path)}.pt"
+
+
+def _save_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+    masks: dict[int, torch.Tensor],
+) -> None:
+    """
+    Persist generated-space warped structure masks for reuse by dose metrics.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path used as the cache key.
+
+    masks : dict[int, torch.Tensor]
+        CPU or GPU boolean masks keyed by structure label.
+    """
+
+    cache_path = _warped_structure_mask_cache_path(config, generated_ct_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({label: mask.detach().cpu().bool() for label, mask in masks.items()}, cache_path)
+
+
+def _load_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+) -> dict[int, torch.Tensor] | None:
+    """
+    Load persisted generated-space warped structure masks when available.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing `warped_structure_cache_dir`.
+
+    generated_ct_path : Path
+        Generated CT tensor path used as the cache key.
+
+    Returns
+    -------
+    masks : dict[int, torch.Tensor] | None
+        CPU boolean masks keyed by structure label, or `None` when no complete
+        cache exists for the configured structure labels.
+    """
+
+    cache_path = _warped_structure_mask_cache_path(config, generated_ct_path)
+    if not cache_path.exists():
+        return None
+
+    loaded = torch.load(cache_path, weights_only=True)
+    if not isinstance(loaded, dict):
+        logger.warning("Ignoring invalid warped-structure cache: %s", cache_path)
+        return None
+
+    masks: dict[int, torch.Tensor] = {}
+    for label in config.structure_labels:
+        value = loaded.get(label)
+        if value is None:
+            value = loaded.get(str(label))
+
+        if not isinstance(value, torch.Tensor):
+            logger.warning("Ignoring incomplete warped-structure cache: %s", cache_path)
+            return None
+
+        masks[label] = value.detach().cpu().bool()
+
+    return masks
+
+
 def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:
     """
     Convert a pipeline tensor to a SimpleITK image.
@@ -1592,36 +1704,6 @@ def _dose_at_volume_from_values(structure_dose: torch.Tensor, volume_percent: fl
         (100.0 - volume_percent) / 100.0, dtype=structure_dose.dtype, device=structure_dose.device
     )
     return float(torch.quantile(structure_dose, quantile).item())
-
-
-def _masked_error_metrics(
-    pred_dose: torch.Tensor,
-    ref_dose: torch.Tensor,
-    mask: torch.Tensor,
-) -> tuple[float, float]:
-    """
-    Calculate masked voxel MAE and RMSE between two dose distributions.
-
-    Parameters
-    ----------
-    pred_dose : torch.Tensor
-        Predicted dose tensor already on the metric device.
-
-    ref_dose : torch.Tensor
-        Reference dose tensor already on the metric device.
-
-    mask : torch.Tensor
-        Boolean mask already on the metric device.
-
-    Returns
-    -------
-    metrics : tuple[float, float]
-        Pair containing masked voxel MAE and RMSE. Empty masks return
-        `(nan, nan)`.
-    """
-
-    mask_t = mask.bool()
-    return _masked_error_metrics_from_values(pred_dose[mask_t], ref_dose[mask_t])
 
 
 def _masked_error_metrics_from_values(pred_values: torch.Tensor, ref_values: torch.Tensor) -> tuple[float, float]:

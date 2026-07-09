@@ -10,15 +10,15 @@ from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
+    WarpedStructureMaskCache,
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
-    _extract_patient_id,
     _get_structure_label_transform,
     _is_planning_ct_path,
     _label_to_binary_mask,
     _load_hu_tensor,
     _load_structure_label_map,
-    _normalised_cache_key,
+    _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
     _surface_distances,
@@ -26,101 +26,6 @@ from src.pipeline.helpers.helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-WarpedStructureMaskCache = dict[Path, dict[int, torch.Tensor]]
-
-
-def warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_path: Path) -> Path:
-    """
-    Resolve the persisted warped-mask cache path for one generated CT.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path whose generated-space masks are cached.
-
-    Returns
-    -------
-    path : Path
-        Cache file path for warped masks keyed by structure label.
-    """
-
-    patient_id = _extract_patient_id(generated_ct_path)
-    return config.warped_structure_cache_dir / patient_id / f"{_normalised_cache_key(generated_ct_path)}.pt"
-
-
-def save_warped_structure_masks(
-    config: MaisiTestingConfig,
-    generated_ct_path: Path,
-    masks: dict[int, torch.Tensor],
-) -> None:
-    """
-    Persist generated-space warped structure masks for reuse by dose metrics.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path used as the cache key.
-
-    masks : dict[int, torch.Tensor]
-        CPU or GPU boolean masks keyed by structure label.
-    """
-
-    cache_path = warped_structure_mask_cache_path(config, generated_ct_path)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({label: mask.detach().cpu().bool() for label, mask in masks.items()}, cache_path)
-
-
-def load_warped_structure_masks(
-    config: MaisiTestingConfig,
-    generated_ct_path: Path,
-) -> dict[int, torch.Tensor] | None:
-    """
-    Load persisted generated-space warped structure masks when available.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path used as the cache key.
-
-    Returns
-    -------
-    masks : dict[int, torch.Tensor] | None
-        CPU boolean masks keyed by structure label, or `None` when no complete
-        cache exists for the configured structure labels.
-    """
-
-    cache_path = warped_structure_mask_cache_path(config, generated_ct_path)
-    if not cache_path.exists():
-        return None
-
-    loaded = torch.load(cache_path, weights_only=True)
-    if not isinstance(loaded, dict):
-        logger.warning("Ignoring invalid warped-structure cache: %s", cache_path)
-        return None
-
-    masks: dict[int, torch.Tensor] = {}
-    for label in config.structure_labels:
-        value = loaded.get(label)
-        if value is None:
-            value = loaded.get(str(label))
-
-        if not isinstance(value, torch.Tensor):
-            logger.warning("Ignoring incomplete warped-structure cache: %s", cache_path)
-            return None
-
-        masks[label] = value.detach().cpu().bool()
-
-    return masks
 
 
 def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> float:
@@ -431,7 +336,7 @@ def calculate_structure_similarity_metrics(
                         )
 
                 if all(label in generated_masks for label in config.structure_labels):
-                    save_warped_structure_masks(config, result.gen_path, generated_masks)
+                    _save_warped_structure_masks(config, result.gen_path, generated_masks)
 
         if metric_device.type == "cuda" and len(gen_paths) > 1:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:

@@ -1,6 +1,5 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +9,12 @@ import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.evaluation.structure_metrics import (
-    WarpedStructureMaskCache,
-)
 from src.pipeline.helpers.helpers import (
+    WarpedStructureMaskCache,
     _collect_dose_distributions,
     _dose_at_volume_from_values,
     _dose_volume_histogram_from_values,
+    _DoseComparisonData,
     _generated_ct_lookup,
     _get_dose_transform,
     _get_structure_label_transform,
@@ -33,29 +31,6 @@ from src.pipeline.helpers.helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _DoseComparisonData:
-    """
-    Store CPU-loaded data for one predicted/reference dose comparison.
-
-    Dose maps and structure labels are loaded on CPU because NIfTI decoding and
-    MONAI transforms are CPU-bound. The metric loop moves only the current
-    comparison to the configured metric device, which keeps GPU memory bounded.
-    """
-
-    pred_path: Path
-    ref_path: Path
-    pred_dose: torch.Tensor | None
-    ref_dose: torch.Tensor | None
-    ref_label_map: torch.Tensor | None
-    pred_masks: dict[int, torch.Tensor] | None
-    pred_structure_source: str
-    ref_structure_source: str
-    info_message: str | None = None
-    nonfatal_warning: str | None = None
-    warning: str | None = None
 
 
 def dose_volume_histogram(
