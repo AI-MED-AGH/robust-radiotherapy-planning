@@ -11,26 +11,169 @@ from tqdm import tqdm
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     WarpedStructureMaskCache,
+    _append_single_dose_rows,
+    _clinical_metric_values,
     _collect_dose_distributions,
     _dose_at_volume_from_values,
     _dose_volume_histogram_from_values,
     _DoseComparisonData,
+    _evaluate_dose_on_generated_structures,
     _generated_ct_lookup,
     _get_dose_transform,
     _get_structure_label_transform,
     _label_to_binary_mask,
     _load_dose_comparison_data,
+    _load_dose_distribution,
     _masked_dose_values,
     _masked_error_metrics_from_values,
     _maximum_dose_from_values,
     _mean_dose_from_values,
     _metric_row,
     _normalised_image_key,
+    _planning_dose_for_patient,
+    _planning_masks_for_dose,
     _reference_lookup,
     _volume_at_dose_from_values,
+    _write_scenario_outputs,
+    _write_smoke_test_outputs,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
+    """Compare patient-level candidate and clinical doses on fraction-1 structures.
+
+    For every patient with an unambiguous candidate and clinical planning
+    dose, calculate the configured clinical metrics using the original
+    fraction-1 structure masks. Detailed values and differences are written to
+    ``original_anatomy_comparison.csv`` in ``config.metrics_dir``. Patients
+    with missing doses, masks, or incompatible dose shapes are skipped.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing dose directories, structure labels,
+        clinical metric settings, preprocessing options, and the output path.
+    """
+
+    predicted = _collect_dose_distributions(config.predicted_dose_dir)
+    references = _collect_dose_distributions(config.reference_dose_dir)
+    dose_transform = _get_dose_transform(config)
+    structure_transform = _get_structure_label_transform(config)
+    rows: list[dict[str, Any]] = []
+    for patient_id, reference_paths in references.items():
+        clinical_path = _planning_dose_for_patient(reference_paths)
+        candidate_path = _planning_dose_for_patient(predicted.get(patient_id, []))
+        if clinical_path is None or candidate_path is None:
+            continue
+        clinical = _load_dose_distribution(clinical_path, dose_transform)
+        candidate = _load_dose_distribution(candidate_path, dose_transform)
+        masks = _planning_masks_for_dose(clinical_path, structure_transform, config)
+        if masks is None or clinical.shape != candidate.shape:
+            continue
+        for label, mask in masks.items():
+            clinical_metrics = _clinical_metric_values(clinical, mask, config)
+            candidate_metrics = _clinical_metric_values(candidate, mask, config)
+            for metric, candidate_value in candidate_metrics.items():
+                clinical_value = clinical_metrics[metric]
+                rows.append(
+                    {
+                        "patient_id": patient_id,
+                        "structure_label": label,
+                        "metric": metric,
+                        "candidate_value": candidate_value,
+                        "clinical_fraction_1_value": clinical_value,
+                        "difference": candidate_value - clinical_value,
+                        "absolute_difference": abs(candidate_value - clinical_value),
+                        "candidate_dose_path": str(candidate_path),
+                        "clinical_dose_path": str(clinical_path),
+                        "structure_source": "original_fraction_1_structure",
+                    }
+                )
+    if rows:
+        pd.DataFrame(rows).to_csv(config.metrics_dir / "original_anatomy_comparison.csv", index=False)
+    else:
+        logger.warning("Skipping original anatomy comparison: no patient-level candidate doses were found")
+
+
+def evaluate_scenario_robustness(
+    config: MaisiTestingConfig,
+    warped_mask_cache: WarpedStructureMaskCache | None = None,
+) -> None:
+    """Evaluate configured candidate doses across all generated anatomies.
+
+    Candidate doses are matched to generated CT scenarios and evaluated using
+    planning structure masks warped into each generated anatomy. Detailed and
+    across-scenario summary CSV files are written under ``config.metrics_dir``.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing predicted and reference dose paths,
+        generated CT paths, structure labels, and clinical metric settings.
+
+    warped_mask_cache : WarpedStructureMaskCache | None, optional
+        Reusable generated-space masks keyed by generated CT path. If omitted,
+        a new cache is created for this evaluation.
+    """
+
+    cache = warped_mask_cache if warped_mask_cache is not None else {}
+    references = _collect_dose_distributions(config.reference_dose_dir)
+    predicted = _collect_dose_distributions(config.predicted_dose_dir)
+    rows = _evaluate_dose_on_generated_structures(predicted, references, config, config.dose_model_name, cache)
+    _write_scenario_outputs(rows, config, "scenario_robustness")
+
+
+def evaluate_base_dose_smoke_test(
+    config: MaisiTestingConfig,
+    warped_mask_cache: WarpedStructureMaskCache | None = None,
+) -> None:
+    """Evaluate the clinical fraction-1 dose on original and generated structures.
+
+    This calculation does not require predicted doses. It writes detailed and
+    summary CSV files under ``config.metrics_dir``. Configuration and input
+    availability are validated by the metrics orchestrator before this
+    function is called.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing reference dose paths, generated CT
+        paths, structure labels, clinical metric settings, and output paths.
+
+    warped_mask_cache : WarpedStructureMaskCache | None, optional
+        Reusable generated-space masks keyed by generated CT path. If omitted,
+        a new cache is created for this evaluation.
+    """
+
+    cache = warped_mask_cache if warped_mask_cache is not None else {}
+    references = _collect_dose_distributions(config.reference_dose_dir)
+    rows = _evaluate_dose_on_generated_structures(references, references, config, "base_fraction_1", cache)
+    dose_transform = _get_dose_transform(config)
+    structure_transform = _get_structure_label_transform(config)
+    for patient_id, paths in references.items():
+        dose_path = _planning_dose_for_patient(paths)
+        if dose_path is None:
+            continue
+        dose = _load_dose_distribution(dose_path, dose_transform)
+        masks = _planning_masks_for_dose(dose_path, structure_transform, config)
+        if masks is not None:
+            _append_single_dose_rows(
+                rows,
+                dose,
+                masks,
+                config,
+                {
+                    "dose_source": "base_fraction_1",
+                    "patient_id": patient_id,
+                    "scenario_id": "fraction_1_original",
+                    "scenario_type": "original_anatomy",
+                    "dose_path": str(dose_path),
+                    "structure_source": "original_fraction_1_structure",
+                },
+            )
+    _write_smoke_test_outputs(rows, config)
 
 
 def dose_volume_histogram(
@@ -534,9 +677,8 @@ def evaluate_predicted_doses(
     """
     Collect configured predicted/reference dose directories and run metrics.
 
-    Missing prediction/reference folders are treated as a skipped optional
-    baseline so the CT evaluation pipeline can run before dose predictors are
-    available.
+    Directory availability and configuration are validated once by the
+    metrics orchestrator before this calculation function is called.
 
     Parameters
     ----------
@@ -550,24 +692,8 @@ def evaluate_predicted_doses(
         dose structure metrics.
     """
 
-    if not config.use_dose_metrics:
-        logger.info("Skipping dose metrics: disabled by configuration")
-        return
-
-    if not config.predicted_dose_dir.exists():
-        logger.warning("Skipping dose metrics: predicted dose directory does not exist: %s", config.predicted_dose_dir)
-        return
-
-    if not config.reference_dose_dir.exists():
-        logger.warning("Skipping dose metrics: reference dose directory does not exist: %s", config.reference_dose_dir)
-        return
-
-    try:
-        predicted = _collect_dose_distributions(config.predicted_dose_dir)
-        references = _collect_dose_distributions(config.reference_dose_dir)
-    except ValueError as exc:
-        logger.warning("Skipping dose metrics: %s", exc)
-        return
+    predicted = _collect_dose_distributions(config.predicted_dose_dir)
+    references = _collect_dose_distributions(config.reference_dose_dir)
 
     calculate_dose_evaluation_metrics(
         predicted=predicted,

@@ -4,11 +4,11 @@ from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
-from src.pipeline.evaluation.metrics import evaluate_generated_cts
+from src.pipeline.evaluation.metrics import evaluate_doses, evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
 
-PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "all"]
+PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,8 +51,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "stage",
-        choices=["prepare", "encode", "generate", "evaluate", "all"],
-        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', or 'all'"),
+        choices=["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"],
+        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', 'dose-evaluate', or 'all'"),
     )
 
     parser.add_argument(
@@ -111,6 +111,24 @@ def parse_args() -> argparse.Namespace:
         "--no-dose-structure-warping",
         action="store_true",
         help="Disable DVF-based planning structure warping for generated-dose structure metrics",
+    )
+
+    parser.add_argument(
+        "--scenario-robustness",
+        action="store_true",
+        help="Enable evaluation of candidate doses across generated-anatomy scenarios",
+    )
+
+    parser.add_argument(
+        "--original-anatomy-comparison",
+        action="store_true",
+        help="Enable robust-vs-clinical dose comparison on fraction-1 structures",
+    )
+
+    parser.add_argument(
+        "--no-base-dose-smoke-test",
+        action="store_true",
+        help="Disable the fraction-1 base-dose smoke test",
     )
 
     parser.add_argument(
@@ -237,6 +255,9 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "use_structure_metrics": not args.no_structure_metrics,
         "use_dose_metrics": not args.no_dose_metrics,
         "use_dose_structure_warping": not args.no_dose_structure_warping,
+        "use_base_dose_smoke_test": not args.no_base_dose_smoke_test,
+        "use_scenario_robustness": args.scenario_robustness,
+        "use_original_anatomy_comparison": args.original_anatomy_comparison,
     }
 
     if args.structure_labels is not None:
@@ -324,6 +345,9 @@ def run_stage(
 
     elif stage == "evaluate":
         evaluate_generated_cts(config)
+
+    elif stage == "dose-evaluate":
+        evaluate_doses(config)
 
     elif stage == "all":
         prepare_test_data(config)

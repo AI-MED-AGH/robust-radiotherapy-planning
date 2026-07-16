@@ -163,8 +163,21 @@ class MaisiTestingConfig:
         structure-based metrics.
 
     use_dose_metrics : bool
-        Whether to calculate predicted-vs-reference dose metrics when dose
-        prediction outputs are available.
+        Parent switch for all dose workflows. When false, the base-dose smoke
+        test and every predicted-dose evaluation are disabled.
+
+    use_base_dose_smoke_test : bool
+        Whether to evaluate the clinical fraction-1 dose on the original and
+        generated-anatomy structures. Enabled by default and does not require
+        predicted doses.
+
+    use_scenario_robustness : bool
+        Whether to evaluate candidate doses across generated anatomies when
+        predicted doses are available. Disabled by default.
+
+    use_original_anatomy_comparison : bool
+        Whether to compare a candidate dose with the clinical dose on the
+        original fraction-1 structures. Disabled by default.
 
     dose_model_name : str
         Name written to dose metric outputs for the evaluated prediction
@@ -307,6 +320,9 @@ class MaisiTestingConfig:
 
     # Dose metric arguments
     use_dose_metrics: bool = True
+    use_base_dose_smoke_test: bool = True
+    use_scenario_robustness: bool = False
+    use_original_anatomy_comparison: bool = False
     dose_model_name: str = "prediction"
     dose_dvh_bin_width: float = 1.0
     dose_dx_volume_percents: list[float] = field(default_factory=lambda: [2.0, 5.0, 50.0, 95.0, 98.0])
