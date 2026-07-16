@@ -2176,7 +2176,9 @@ def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConf
     frame = pd.DataFrame(rows)
     frame.to_csv(config.metrics_dir / f"{stem}.csv", index=False)
     summary = (
-        frame.groupby(["dose_source", "patient_id", "structure_label", "metric"], dropna=False)["value"]
+        frame.groupby(["dose_source", "patient_id", "scenario_type", "structure_label", "metric"], dropna=False)[
+            "value"
+        ]
         .agg(["mean", "std", "min", "max", "count"])
         .reset_index()
     )
@@ -2218,18 +2220,18 @@ def _write_smoke_test_outputs(rows: list[dict[str, Any]], config: MaisiTestingCo
     comparison["relative_difference_percent"] = 100.0 * comparison["difference_from_original"] / denominator
     comparison.to_csv(config.metrics_dir / "base_dose_smoke_test.csv", index=False)
 
-    generated = comparison.loc[comparison["scenario_type"] == "generated_anatomy"]
-    if generated.empty:
-        logger.warning("Base dose smoke test contains no generated-anatomy comparisons")
+    alternatives = comparison.loc[comparison["scenario_type"] != "original_anatomy"]
+    if alternatives.empty:
+        logger.warning("Base dose smoke test contains no alternative-anatomy comparisons")
         return
     summary = (
-        generated.groupby(key_columns, dropna=False)
+        alternatives.groupby([*key_columns, "scenario_type"], dropna=False)
         .agg(
             original_anatomy_value=("original_anatomy_value", "first"),
-            generated_mean=("value", "mean"),
-            generated_std=("value", "std"),
-            generated_min=("value", "min"),
-            generated_max=("value", "max"),
+            alternative_mean=("value", "mean"),
+            alternative_std=("value", "std"),
+            alternative_min=("value", "min"),
+            alternative_max=("value", "max"),
             mean_absolute_difference=("absolute_difference_from_original", "mean"),
             maximum_absolute_difference=("absolute_difference_from_original", "max"),
             mean_absolute_relative_difference_percent=(
@@ -2241,6 +2243,88 @@ def _write_smoke_test_outputs(rows: list[dict[str, Any]], config: MaisiTestingCo
         .reset_index()
     )
     summary.to_csv(config.metrics_dir / "base_dose_smoke_test_summary.csv", index=False)
+
+
+def _select_dose_for_anatomy(
+    anatomy_path: Path,
+    patient_doses: list[Path],
+    clinical_paths: list[Path],
+    dose_source: str,
+    force_clinical: bool = False,
+) -> tuple[Path | None, str]:
+    """Select a scenario, planning, or clinical fallback dose for one anatomy."""
+
+    clinical_path = _planning_dose_for_patient(clinical_paths)
+    if force_clinical:
+        return clinical_path, "clinical_fraction_1"
+
+    anatomy_key = _normalised_image_key(anatomy_path)
+    scenario_path = next((path for path in patient_doses if _normalised_image_key(path) == anatomy_key), None)
+    if scenario_path is not None:
+        return scenario_path, f"{dose_source}_scenario_specific"
+
+    candidate_path = _planning_dose_for_patient(patient_doses)
+    if candidate_path is not None:
+        return candidate_path, f"{dose_source}_planning_fallback"
+
+    if clinical_path is not None:
+        return clinical_path, "clinical_fraction_1_fallback"
+
+    return None, "none"
+
+
+def _evaluate_dose_on_real_structures(
+    dose_groups: dict[str, list[Path]],
+    reference_groups: dict[str, list[Path]],
+    config: MaisiTestingConfig,
+    dose_source: str,
+    force_clinical: bool = False,
+) -> list[dict[str, Any]]:
+    """Evaluate selected doses on every available real-fraction structure map."""
+
+    dose_transform = _get_dose_transform(config)
+    structure_transform = _get_structure_label_transform(config)
+    real_ct_paths = sorted(config.processed_ct_dir.rglob("*.pt"))
+    rows: list[dict[str, Any]] = []
+
+    for ct_path in real_ct_paths:
+        patient_id = _extract_patient_id(ct_path)
+        dose_path, selected_source = _select_dose_for_anatomy(
+            anatomy_path=ct_path,
+            patient_doses=dose_groups.get(patient_id, []),
+            clinical_paths=reference_groups.get(patient_id, []),
+            dose_source=dose_source,
+            force_clinical=force_clinical,
+        )
+        if dose_path is None:
+            logger.warning("Skipping real-anatomy dose metrics for %s: no dose found", ct_path)
+            continue
+
+        structure_path = _structure_path_for_ct(ct_path, config)
+        if not structure_path.exists():
+            logger.warning("Skipping real-anatomy dose metrics for %s: missing %s", ct_path, structure_path)
+            continue
+
+        dose = _load_dose_distribution(dose_path, dose_transform)
+        label_map = _load_structure_label_map(structure_path, structure_transform)
+        masks = {label: _label_to_binary_mask(label_map, label) for label in config.structure_labels}
+        scenario_type = "original_anatomy" if _is_planning_ct_path(ct_path) else "real_fraction_anatomy"
+        _append_single_dose_rows(
+            rows,
+            dose,
+            masks,
+            config,
+            {
+                "dose_source": selected_source,
+                "patient_id": patient_id,
+                "scenario_id": _normalised_image_key(ct_path),
+                "scenario_type": scenario_type,
+                "dose_path": str(dose_path),
+                "structure_source": str(structure_path),
+            },
+        )
+
+    return rows
 
 
 def _evaluate_dose_on_generated_structures(
@@ -2288,28 +2372,17 @@ def _evaluate_dose_on_generated_structures(
     rows: list[dict[str, Any]] = []
     for patient_id, generated_paths in generated_by_patient.items():
         patient_doses = dose_groups.get(patient_id, [])
-        fallback_dose_path = _planning_dose_for_patient(patient_doses)
-        clinical_path = _planning_dose_for_patient(reference_groups.get(patient_id, []))
-        # The smoke test intentionally holds the clinical planning dose fixed
-        # while changing only the generated-anatomy structure masks
-        if dose_source == "base_fraction_1":
-            fallback_dose_path = clinical_path
-        if fallback_dose_path is None and not patient_doses:
-            logger.warning("Skipping %s scenarios for %s: no dose found", dose_source, patient_id)
-            continue
-
         planning_ct_cache: dict[str, torch.Tensor] = {}
         planning_label_map_cache: dict[str, torch.Tensor] = {}
         for generated_path in sorted(generated_paths):
-            # Prefer a scenario-specific dose; use the patient-level planning
-            # dose only when no file shares the generated CT's scenario stem
-            scenario_dose_path = next(
-                (
-                    path
-                    for path in patient_doses
-                    if _normalised_image_key(path) == _normalised_image_key(generated_path)
-                ),
-                fallback_dose_path,
+            # Use the same explicit scenario/planning/clinical fallback policy
+            # for generated and observed real anatomies.
+            scenario_dose_path, selected_source = _select_dose_for_anatomy(
+                anatomy_path=generated_path,
+                patient_doses=patient_doses,
+                clinical_paths=reference_groups.get(patient_id, []),
+                dose_source=dose_source,
+                force_clinical=dose_source == "base_fraction_1",
             )
             if scenario_dose_path is None:
                 logger.warning("Skipping %s: no matching or patient-level dose", generated_path)
@@ -2336,7 +2409,7 @@ def _evaluate_dose_on_generated_structures(
                 masks,
                 config,
                 {
-                    "dose_source": dose_source,
+                    "dose_source": selected_source,
                     "patient_id": patient_id,
                     "scenario_id": _normalised_image_key(generated_path),
                     "scenario_type": "generated_anatomy",

@@ -11,13 +11,14 @@ from tqdm import tqdm
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers import (
     WarpedStructureMaskCache,
-    _append_single_dose_rows,
     _clinical_metric_values,
     _collect_dose_distributions,
+    _contains_dose_files,
     _dose_at_volume_from_values,
     _dose_volume_histogram_from_values,
     _DoseComparisonData,
     _evaluate_dose_on_generated_structures,
+    _evaluate_dose_on_real_structures,
     _generated_ct_lookup,
     _get_dose_transform,
     _get_structure_label_transform,
@@ -103,10 +104,11 @@ def evaluate_scenario_robustness(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Evaluate configured candidate doses across all generated anatomies.
+    """Evaluate configured candidate doses across real and generated anatomies.
 
-    Candidate doses are matched to generated CT scenarios and evaluated using
-    planning structure masks warped into each generated anatomy. Detailed and
+    Candidate doses are matched to observed real fractions and generated CT
+    scenarios. Missing scenario doses fall back to an unambiguous candidate
+    planning dose and then to the clinical fraction-1 dose. Detailed and
     across-scenario summary CSV files are written under ``config.metrics_dir``.
 
     Parameters
@@ -122,8 +124,13 @@ def evaluate_scenario_robustness(
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
     references = _collect_dose_distributions(config.reference_dose_dir)
-    predicted = _collect_dose_distributions(config.predicted_dose_dir)
-    rows = _evaluate_dose_on_generated_structures(predicted, references, config, config.dose_model_name, cache)
+    predicted = (
+        _collect_dose_distributions(config.predicted_dose_dir)
+        if _contains_dose_files(config.predicted_dose_dir)
+        else {}
+    )
+    rows = _evaluate_dose_on_real_structures(predicted, references, config, config.dose_model_name)
+    rows.extend(_evaluate_dose_on_generated_structures(predicted, references, config, config.dose_model_name, cache))
     _write_scenario_outputs(rows, config, "scenario_robustness")
 
 
@@ -131,12 +138,12 @@ def evaluate_base_dose_smoke_test(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Evaluate the clinical fraction-1 dose on original and generated structures.
+    """Evaluate the clinical fraction-1 dose on all real and generated structures.
 
+    The numerical dose is held fixed while structure masks come from the
+    original fraction, observed follow-up fractions, and generated anatomies.
     This calculation does not require predicted doses. It writes detailed and
-    summary CSV files under ``config.metrics_dir``. Configuration and input
-    availability are validated by the metrics orchestrator before this
-    function is called.
+    summary CSV files under ``config.metrics_dir``.
 
     Parameters
     ----------
@@ -151,32 +158,16 @@ def evaluate_base_dose_smoke_test(
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
     references = _collect_dose_distributions(config.reference_dose_dir)
-    # Use the clinical planning dose as both the scenario dose and fallback;
-    # only the anatomy-specific warped masks change across this smoke test.
-    rows = _evaluate_dose_on_generated_structures(references, references, config, "base_fraction_1", cache)
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
-    for patient_id, paths in references.items():
-        dose_path = _planning_dose_for_patient(paths)
-        if dose_path is None:
-            continue
-        dose = _load_dose_distribution(dose_path, dose_transform)
-        masks = _planning_masks_for_dose(dose_path, structure_transform, config)
-        if masks is not None:
-            _append_single_dose_rows(
-                rows,
-                dose,
-                masks,
-                config,
-                {
-                    "dose_source": "base_fraction_1",
-                    "patient_id": patient_id,
-                    "scenario_id": "fraction_1_original",
-                    "scenario_type": "original_anatomy",
-                    "dose_path": str(dose_path),
-                    "structure_source": "original_fraction_1_structure",
-                },
-            )
+    # Keep the clinical planning dose fixed while evaluating original, observed
+    # follow-up, and generated-anatomy structure masks
+    rows = _evaluate_dose_on_real_structures(
+        references,
+        references,
+        config,
+        "base_fraction_1",
+        force_clinical=True,
+    )
+    rows.extend(_evaluate_dose_on_generated_structures(references, references, config, "base_fraction_1", cache))
     _write_smoke_test_outputs(rows, config)
 
 

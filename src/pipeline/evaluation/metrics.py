@@ -65,17 +65,15 @@ def evaluate_doses(
     else:
         logger.info("Skipping base-dose smoke test: disabled by configuration")
 
-    if not _contains_dose_files(config.predicted_dose_dir):
+    has_predicted_doses = _contains_dose_files(config.predicted_dose_dir)
+    if not has_predicted_doses:
         logger.info(
-            "Skipping predicted-dose workflows: no predicted doses found in %s",
+            "No predicted doses found in %s; scenario robustness will use the clinical fallback if enabled",
             config.predicted_dose_dir,
         )
-        return
-
-    # From here onward both clinical and predicted inputs are available; each
-    # workflow applies its own feature flag but does not repeat these checks
-    logger.info("Calculating predicted-vs-reference dose metrics")
-    evaluate_predicted_doses(config, warped_mask_cache=warped_mask_cache)
+    else:
+        logger.info("Calculating predicted-vs-reference dose metrics")
+        evaluate_predicted_doses(config, warped_mask_cache=warped_mask_cache)
 
     if config.use_scenario_robustness:
         logger.info("Calculating scenario robustness metrics")
@@ -83,9 +81,11 @@ def evaluate_doses(
     else:
         logger.info("Skipping scenario robustness metrics: disabled by configuration")
 
-    if config.use_original_anatomy_comparison:
+    if config.use_original_anatomy_comparison and has_predicted_doses:
         logger.info("Calculating original-anatomy dose comparison")
         evaluate_original_anatomy_comparison(config)
+    elif config.use_original_anatomy_comparison:
+        logger.info("Skipping original-anatomy dose comparison: no predicted doses found")
     else:
         logger.info("Skipping original-anatomy dose comparison: disabled by configuration")
 
