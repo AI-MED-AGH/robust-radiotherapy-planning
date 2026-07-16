@@ -1,6 +1,7 @@
 import gc
 import glob
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -1699,11 +1700,20 @@ def _dose_at_volume_from_values(structure_dose: torch.Tensor, volume_percent: fl
         return float("nan")
 
     # Dx is a lower-tail quantile: D95 is the fifth percentile because 95% of
-    # the selected volume must receive at least the returned dose
-    quantile = torch.as_tensor(
-        (100.0 - volume_percent) / 100.0, dtype=structure_dose.dtype, device=structure_dose.device
-    )
-    return float(torch.quantile(structure_dose, quantile).item())
+    # the selected volume must receive at least the returned dose. PyTorch's
+    # quantile rejects tensors above 2**24 elements, so reproduce its default
+    # linear interpolation with kthvalue for full-resolution structure masks.
+    quantile = (100.0 - volume_percent) / 100.0
+    rank = quantile * (structure_dose.numel() - 1)
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    lower_value = structure_dose.kthvalue(lower_index + 1).values
+    if lower_index == upper_index:
+        return float(lower_value.item())
+
+    upper_value = structure_dose.kthvalue(upper_index + 1).values
+    interpolated = lower_value + (upper_value - lower_value) * (rank - lower_index)
+    return float(interpolated.item())
 
 
 def _masked_error_metrics_from_values(pred_values: torch.Tensor, ref_values: torch.Tensor) -> tuple[float, float]:
