@@ -53,6 +53,8 @@ def evaluate_doses(
         logger.info("Skipping dose metrics: disabled by configuration")
         return
 
+    # Every dose workflow needs the clinical dose set, including the smoke
+    # test that intentionally runs without model predictions
     if not _contains_dose_files(config.reference_dose_dir):
         logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.reference_dose_dir)
         return
@@ -70,7 +72,8 @@ def evaluate_doses(
         )
         return
 
-    # The dose functions below assume this setup has already been validated.
+    # From here onward both clinical and predicted inputs are available; each
+    # workflow applies its own feature flag but does not repeat these checks
     logger.info("Calculating predicted-vs-reference dose metrics")
     evaluate_predicted_doses(config, warped_mask_cache=warped_mask_cache)
 
@@ -145,6 +148,7 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
 
     originals: dict[str, list[Path]] = {}
 
+    # setdefault keeps discovery tolerant of sparse and uneven patient sets
     for path in paths:
         patient_id = _extract_patient_id(path)
         originals.setdefault(patient_id, []).append(Path(path))
@@ -216,6 +220,8 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
 
     generated: dict[str, list[Path]] = {}
 
+    # Preserve every generated variant; later metric stages decide which
+    # patient/scenario pairs have a corresponding reference
     for path in paths:
         patient_id = _extract_patient_id(path)
         generated.setdefault(patient_id, []).append(Path(path))
@@ -263,6 +269,8 @@ def evaluate_generated_cts(
 
     clear_directory_contents(config.metrics_dir)
 
+    # Collect once and pass the same grouping to all image/structure stages so
+    # they evaluate an identical snapshot of the available files
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
     lpips_model = _build_lpips_model(config)
@@ -281,8 +289,12 @@ def evaluate_generated_cts(
         config=config,
         lpips_model=lpips_model,
     )
+    # Release metric tensors before registration and structure processing,
+    # which can also have substantial CPU and GPU memory footprints
     _clean_pipeline_memory()
 
+    # Structure evaluation returns generated-space masks keyed by CT path.
+    # Dose evaluation consumes the same cache later when enabled.
     warped_mask_cache = {}
     if config.use_structure_metrics:
         logger.info("Calculating generated-vs-real structure metrics")
@@ -303,6 +315,8 @@ def evaluate_generated_cts(
     )
     _clean_pipeline_memory()
 
+    # Dose orchestration remains last because it can reuse warped masks while
+    # independently deciding which optional dose workflows are configured
     evaluate_doses(config, warped_mask_cache=warped_mask_cache)
     _clean_pipeline_memory()
 

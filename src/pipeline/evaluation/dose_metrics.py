@@ -63,6 +63,8 @@ def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
     structure_transform = _get_structure_label_transform(config)
     rows: list[dict[str, Any]] = []
     for patient_id, reference_paths in references.items():
+        # Planning-dose selection deliberately rejects ambiguous patient-level
+        # inputs, so this comparison is always fraction 1 against fraction 1.
         clinical_path = _planning_dose_for_patient(reference_paths)
         candidate_path = _planning_dose_for_patient(predicted.get(patient_id, []))
         if clinical_path is None or candidate_path is None:
@@ -149,6 +151,8 @@ def evaluate_base_dose_smoke_test(
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
     references = _collect_dose_distributions(config.reference_dose_dir)
+    # Use the clinical planning dose as both the scenario dose and fallback;
+    # only the anatomy-specific warped masks change across this smoke test.
     rows = _evaluate_dose_on_generated_structures(references, references, config, "base_fraction_1", cache)
     dose_transform = _get_dose_transform(config)
     structure_transform = _get_structure_label_transform(config)
@@ -379,6 +383,8 @@ def calculate_dose_evaluation_metrics(
     dose_transform = _get_dose_transform(config)
     structure_transform = _get_structure_label_transform(config)
     generated_ct_lookup = _generated_ct_lookup(config)
+    # The cache may have been populated by structure metrics earlier in the
+    # pipeline. Reusing it avoids repeating expensive deformable registration.
     shared_generated_mask_cache = warped_mask_cache if warped_mask_cache is not None else {}
 
     distribution_rows: list[dict[str, Any]] = []
@@ -432,6 +438,8 @@ def calculate_dose_evaluation_metrics(
         ref_dose = result.ref_dose.to(metric_device)
 
         with torch.inference_mode():
+            # Always report whole-volume metrics. Structure-specific entries
+            # are appended only when a valid reference label map is available.
             masks: list[tuple[str, int | None, torch.Tensor, torch.Tensor, str, str]] = [
                 (
                     "overall",
@@ -469,6 +477,9 @@ def calculate_dose_evaluation_metrics(
                 pred_structure_dose = pred_dose[pred_mask.bool()]
                 ref_structure_dose = ref_dose[ref_mask.bool()]
 
+                # Voxel-wise errors require positional correspondence. Warped
+                # and reference masks can select different voxel sets, while
+                # aggregate clinical metrics remain meaningful for both sets.
                 if torch.equal(pred_mask, ref_mask):
                     voxel_mae, voxel_rmse = _masked_error_metrics_from_values(
                         pred_structure_dose,
@@ -530,6 +541,8 @@ def calculate_dose_evaluation_metrics(
 
                 pred_dvh = _dose_volume_histogram_from_values(pred_structure_dose, config.dose_dvh_bin_width)
                 ref_dvh = _dose_volume_histogram_from_values(ref_structure_dose, config.dose_dvh_bin_width)
+                # Outer alignment preserves bins present in only one curve;
+                # missing cumulative volume is zero beyond that curve's range.
                 merged_dvh = pred_dvh.merge(ref_dvh, on="dose_gy", how="outer", suffixes=("_predicted", "_reference"))
                 merged_dvh = merged_dvh.sort_values("dose_gy").fillna(0.0)
                 for row in merged_dvh.to_dict("records"):
@@ -546,6 +559,8 @@ def calculate_dose_evaluation_metrics(
                     )
 
     for patient_id, pred_paths in tqdm(predicted.items(), desc="Calculating dose metrics"):
+        # Match scenarios by extension-independent filename rather than list
+        # position because directories may contain incomplete scenario sets
         ref_lookup = _reference_lookup(references.get(patient_id, []))
         if len(ref_lookup) == 0:
             warnings.append(f"Skipping dose metrics for {patient_id}: no reference dose found")
@@ -562,6 +577,8 @@ def calculate_dose_evaluation_metrics(
         if len(comparison_paths) == 0:
             continue
 
+        # These caches are patient-scoped: comparisons commonly reuse the same
+        # reference dose, structures, and planning anatomy several times
         reference_dose_cache: dict[Path, torch.Tensor] = {}
         structure_cache: dict[Path, torch.Tensor | None] = {}
         planning_ct_cache: dict[str, torch.Tensor] = {}
@@ -569,6 +586,8 @@ def calculate_dose_evaluation_metrics(
         generated_mask_cache: WarpedStructureMaskCache = shared_generated_mask_cache
 
         if metric_device.type == "cuda" and len(comparison_paths) > 1:
+            # Keep one CPU load ahead of GPU metric calculation. A single
+            # worker avoids concurrent writes to the shared patient caches.
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dose-loading") as executor:
                 next_pred_path, next_ref_path = comparison_paths[0]
                 next_future = executor.submit(
@@ -643,6 +662,7 @@ def calculate_dose_evaluation_metrics(
         distribution_df.to_csv(distribution_path, index=False)
         logger.info("Saved dose distribution metrics: %s", distribution_path)
 
+        # Keep the whole-volume group (`structure_label=None`) in summaries
         summary = distribution_df.groupby(["model_name", "patient_id", "structure_label", "metric"], dropna=False)[
             ["difference", "absolute_difference"]
         ].agg(["mean", "std", "min", "max", "count"])
@@ -656,6 +676,8 @@ def calculate_dose_evaluation_metrics(
         clinical_df.to_csv(clinical_path, index=False)
         logger.info("Saved dose clinical metrics: %s", clinical_path)
 
+        # Use the same grouping contract as distribution metrics so downstream
+        # consumers can join both summary tables directly
         summary = clinical_df.groupby(["model_name", "patient_id", "structure_label", "metric"], dropna=False)[
             ["difference", "absolute_difference"]
         ].agg(["mean", "std", "min", "max", "count"])
