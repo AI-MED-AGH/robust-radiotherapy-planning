@@ -15,13 +15,10 @@ from src.pipeline.evaluation.image_metrics import (
 )
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.cleanup import clear_directory_contents
-from src.pipeline.helpers.helpers import (
-    WarpedStructureMaskCache,
-    _build_lpips_model,
-    _clean_pipeline_memory,
-    _contains_dose_files,
-    _extract_patient_id,
-)
+from src.pipeline.helpers.helpers import _clean_pipeline_memory, _extract_patient_id
+from src.pipeline.helpers.helpers_doses import _contains_dose_files
+from src.pipeline.helpers.helpers_metrics import _build_lpips_model
+from src.pipeline.helpers.helpers_structures import WarpedStructureMaskCache
 
 logger = logging.getLogger(__name__)
 

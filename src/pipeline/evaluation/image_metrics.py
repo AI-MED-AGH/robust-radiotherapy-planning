@@ -11,13 +11,13 @@ from monai.metrics.regression import SSIMMetric
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import (
+from src.pipeline.helpers.helpers import _exclude_planning_cts
+from src.pipeline.helpers.helpers_metrics import (
     LPIPSModel,
     _as_metric_tensor,
     _build_lpips_model,
     _cache_patient_cts,
     _evenly_spaced_slices_for_lpips,
-    _exclude_planning_cts,
     _resolve_metric_device,
     _validate_3d_pair,
 )

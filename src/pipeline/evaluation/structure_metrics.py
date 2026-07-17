@@ -9,14 +9,13 @@ import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import (
+from src.pipeline.helpers.helpers import _is_planning_ct_path, _load_hu_tensor
+from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
     _get_structure_label_transform,
-    _is_planning_ct_path,
     _label_to_binary_mask,
-    _load_hu_tensor,
     _load_structure_label_map,
     _save_warped_structure_masks,
     _structure_path_for_ct,

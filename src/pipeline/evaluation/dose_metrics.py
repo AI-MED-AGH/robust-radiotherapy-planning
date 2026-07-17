@@ -1,5 +1,5 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import math
 from pathlib import Path
 from typing import Any
 
@@ -9,37 +9,234 @@ import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import (
-    WarpedStructureMaskCache,
+from src.pipeline.helpers.helpers_doses import (
     _clinical_metric_values,
-    _collect_dose_distributions,
+    _collect_single_dose_per_patient,
     _contains_dose_files,
-    _dose_at_volume_from_values,
-    _dose_volume_histogram_from_values,
     _DoseComparisonData,
     _evaluate_dose_on_generated_structures,
     _evaluate_dose_on_real_structures,
     _generated_ct_lookup,
     _get_dose_transform,
-    _get_structure_label_transform,
-    _label_to_binary_mask,
     _load_dose_comparison_data,
     _load_dose_distribution,
     _masked_dose_values,
     _masked_error_metrics_from_values,
-    _maximum_dose_from_values,
-    _mean_dose_from_values,
     _metric_row,
-    _normalised_image_key,
-    _planning_dose_for_patient,
     _planning_masks_for_dose,
-    _reference_lookup,
-    _volume_at_dose_from_values,
     _write_scenario_outputs,
     _write_smoke_test_outputs,
 )
+from src.pipeline.helpers.helpers_structures import (
+    WarpedStructureMaskCache,
+    _get_structure_label_transform,
+    _label_to_binary_mask,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def dose_volume_histogram(
+    dose: torch.Tensor | np.ndarray,
+    mask: torch.Tensor | np.ndarray,
+    bin_width: float,
+) -> pd.DataFrame:
+    """Calculate a cumulative DVH for a masked volume.
+
+    For each regularly spaced dose threshold, the cumulative DVH reports the
+    percentage of selected structure voxels receiving at least that dose.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        Dose distribution in physical dose units, normally Gy.
+
+    mask : torch.Tensor | np.ndarray
+        Binary structure mask on the same grid as ``dose``.
+
+    bin_width : float
+        Positive spacing between consecutive dose thresholds, in the same
+        units as ``dose``.
+
+    Returns
+    -------
+    dvh : pd.DataFrame
+        Table with ``dose_gy`` and cumulative ``volume_percent`` columns. An
+        empty mask returns an empty table with those columns.
+
+    Raises
+    ------
+    ValueError
+        If ``bin_width`` is not positive or the dose and mask shapes differ.
+    """
+
+    if bin_width <= 0:
+        raise ValueError("`bin_width` must be greater than 0")
+
+    structure_dose = _masked_dose_values(dose, mask)
+    if structure_dose.numel() == 0:
+        return pd.DataFrame(columns=["dose_gy", "volume_percent"])
+
+    max_value = float(structure_dose.max().item())
+    bins = torch.arange(0.0, max_value + bin_width, bin_width, dtype=torch.float32, device=structure_dose.device)
+    sorted_dose = torch.sort(structure_dose).values
+    first_ge_indices = torch.searchsorted(sorted_dose, bins, right=False)
+    volume_percent = (structure_dose.numel() - first_ge_indices).float() / structure_dose.numel() * 100.0
+    return pd.DataFrame(
+        {
+            "dose_gy": bins.detach().cpu().numpy(),
+            "volume_percent": volume_percent.detach().cpu().numpy(),
+        }
+    )
+
+
+def dose_at_volume(
+    dose: torch.Tensor | np.ndarray,
+    mask: torch.Tensor | np.ndarray,
+    volume_percent: float,
+) -> float:
+    """Calculate Dx, the dose received by at least x percent of a volume.
+
+    Dx is evaluated as the lower-tail quantile ``(100 - x) / 100`` using
+    linear interpolation. For example, D95 is the fifth percentile of the
+    selected dose values.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        Dose distribution in physical dose units, normally Gy.
+
+    mask : torch.Tensor | np.ndarray
+        Binary structure mask on the same grid as ``dose``.
+
+    volume_percent : float
+        Percentage of the structure that must receive at least the returned
+        dose. Must lie in ``[0, 100]``.
+
+    Returns
+    -------
+    dose_value : float
+        Dx in the same units as ``dose``. An empty mask returns ``NaN``.
+
+    Raises
+    ------
+    ValueError
+        If ``volume_percent`` is outside ``[0, 100]`` or the dose and mask
+        shapes differ.
+    """
+
+    if volume_percent < 0 or volume_percent > 100:
+        raise ValueError(f"`volume_percent` must be in [0, 100]. Got {volume_percent}")
+
+    structure_dose = _masked_dose_values(dose, mask)
+    if structure_dose.numel() == 0:
+        return float("nan")
+
+    quantile = (100.0 - volume_percent) / 100.0
+    rank = quantile * (structure_dose.numel() - 1)
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    lower_value = structure_dose.kthvalue(lower_index + 1).values
+    if lower_index == upper_index:
+        return float(lower_value.item())
+
+    upper_value = structure_dose.kthvalue(upper_index + 1).values
+    interpolated = lower_value + (upper_value - lower_value) * (rank - lower_index)
+    return float(interpolated.item())
+
+
+def volume_at_dose(
+    dose: torch.Tensor | np.ndarray,
+    mask: torch.Tensor | np.ndarray,
+    dose_threshold: float,
+) -> float:
+    """Calculate Vx, the percentage of a volume receiving at least x dose.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        Dose distribution in physical dose units, normally Gy.
+
+    mask : torch.Tensor | np.ndarray
+        Binary structure mask on the same grid as ``dose``.
+
+    dose_threshold : float
+        Inclusive dose threshold in the same units as ``dose``.
+
+    Returns
+    -------
+    volume_percent : float
+        Percentage of selected voxels for which dose is greater than or equal
+        to ``dose_threshold``. An empty mask returns ``NaN``.
+
+    Raises
+    ------
+    ValueError
+        If the dose and mask shapes differ.
+    """
+
+    structure_dose = _masked_dose_values(dose, mask)
+    if structure_dose.numel() == 0:
+        return float("nan")
+    return float((structure_dose >= dose_threshold).float().mean().item() * 100.0)
+
+
+def mean_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
+    """Calculate the arithmetic mean dose inside a structure mask.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        Dose distribution in physical dose units, normally Gy.
+
+    mask : torch.Tensor | np.ndarray
+        Binary structure mask on the same grid as ``dose``.
+
+    Returns
+    -------
+    mean_value : float
+        Mean selected dose in the same units as ``dose``. An empty mask
+        returns ``NaN``.
+
+    Raises
+    ------
+    ValueError
+        If the dose and mask shapes differ.
+    """
+
+    structure_dose = _masked_dose_values(dose, mask)
+    if structure_dose.numel() == 0:
+        return float("nan")
+    return float(structure_dose.mean().item())
+
+
+def maximum_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
+    """Calculate the maximum dose inside a structure mask.
+
+    Parameters
+    ----------
+    dose : torch.Tensor | np.ndarray
+        Dose distribution in physical dose units, normally Gy.
+
+    mask : torch.Tensor | np.ndarray
+        Binary structure mask on the same grid as ``dose``.
+
+    Returns
+    -------
+    maximum_value : float
+        Maximum selected dose in the same units as ``dose``. An empty mask
+        returns ``NaN``.
+
+    Raises
+    ------
+    ValueError
+        If the dose and mask shapes differ.
+    """
+
+    structure_dose = _masked_dose_values(dose, mask)
+    if structure_dose.numel() == 0:
+        return float("nan")
+    return float(structure_dose.max().item())
 
 
 def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
@@ -47,9 +244,12 @@ def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
 
     For every patient with an unambiguous candidate and clinical planning
     dose, calculate the configured clinical metrics using the original
-    fraction-1 structure masks. Detailed values and differences are written to
+    fraction-1 structure masks. Exactly one candidate dose and one clinical
+    fraction-1 dose are accepted per patient; duplicates raise ``ValueError``.
+    Detailed values and differences are written to
     ``original_anatomy_comparison.csv`` in ``config.metrics_dir``. Patients
-    with missing doses, masks, or incompatible dose shapes are skipped.
+    with missing candidate doses, masks, or incompatible dose shapes are
+    skipped.
 
     Parameters
     ----------
@@ -58,17 +258,15 @@ def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
         clinical metric settings, preprocessing options, and the output path.
     """
 
-    predicted = _collect_dose_distributions(config.predicted_dose_dir)
-    references = _collect_dose_distributions(config.reference_dose_dir)
+    candidates = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
+    clinical_doses = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
     dose_transform = _get_dose_transform(config)
     structure_transform = _get_structure_label_transform(config)
     rows: list[dict[str, Any]] = []
-    for patient_id, reference_paths in references.items():
-        # Planning-dose selection deliberately rejects ambiguous patient-level
-        # inputs, so this comparison is always fraction 1 against fraction 1.
-        clinical_path = _planning_dose_for_patient(reference_paths)
-        candidate_path = _planning_dose_for_patient(predicted.get(patient_id, []))
-        if clinical_path is None or candidate_path is None:
+    for patient_id, clinical_path in clinical_doses.items():
+        candidate_path = candidates.get(patient_id)
+        if candidate_path is None:
+            logger.warning("Skipping original anatomy comparison for %s: no candidate dose found", patient_id)
             continue
         clinical = _load_dose_distribution(clinical_path, dose_transform)
         candidate = _load_dose_distribution(candidate_path, dose_transform)
@@ -106,10 +304,11 @@ def evaluate_scenario_robustness(
 ) -> None:
     """Evaluate configured candidate doses across real and generated anatomies.
 
-    Candidate doses are matched to observed real fractions and generated CT
-    scenarios. Missing scenario doses fall back to an unambiguous candidate
-    planning dose and then to the clinical fraction-1 dose. Detailed and
-    across-scenario summary CSV files are written under ``config.metrics_dir``.
+    Each patient's single candidate dose is held fixed while metrics are
+    evaluated on observed real-fraction and generated-anatomy structure masks.
+    If a patient has no candidate dose, its clinical fraction-1 dose is used as
+    a fallback. Detailed and across-scenario summary CSV files are written
+    under ``config.metrics_dir``.
 
     Parameters
     ----------
@@ -123,9 +322,9 @@ def evaluate_scenario_robustness(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_dose_distributions(config.reference_dose_dir)
+    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
     predicted = (
-        _collect_dose_distributions(config.predicted_dose_dir)
+        _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
         if _contains_dose_files(config.predicted_dose_dir)
         else {}
     )
@@ -157,7 +356,7 @@ def evaluate_base_dose_smoke_test(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_dose_distributions(config.reference_dose_dir)
+    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
     # Keep the clinical planning dose fixed while evaluating original, observed
     # follow-up, and generated-anatomy structure masks
     rows = _evaluate_dose_on_real_structures(
@@ -171,160 +370,9 @@ def evaluate_base_dose_smoke_test(
     _write_smoke_test_outputs(rows, config)
 
 
-def dose_volume_histogram(
-    dose: torch.Tensor | np.ndarray,
-    mask: torch.Tensor | np.ndarray,
-    bin_width: float,
-) -> pd.DataFrame:
-    """
-    Calculate a cumulative dose-volume histogram for a masked volume.
-
-    The returned `volume_percent` is the percentage of structure voxels
-    receiving at least each dose-bin value.
-
-    Parameters
-    ----------
-    dose : torch.Tensor | np.ndarray
-        3D dose map.
-
-    mask : torch.Tensor | np.ndarray
-        Binary mask selecting the evaluated target/OAR volume.
-
-    bin_width : float
-        DVH dose-bin width in Gy.
-
-    Returns
-    -------
-    dvh : pd.DataFrame
-        DataFrame with `dose_gy` and cumulative `volume_percent` columns.
-
-    Raises
-    ------
-    ValueError
-        If `bin_width` is non-positive or dose/mask shapes differ.
-    """
-
-    if bin_width <= 0:
-        raise ValueError("`bin_width` must be greater than 0")
-
-    structure_dose = _masked_dose_values(dose, mask)
-    return _dose_volume_histogram_from_values(structure_dose, bin_width)
-
-
-def dose_at_volume(
-    dose: torch.Tensor | np.ndarray,
-    mask: torch.Tensor | np.ndarray,
-    volume_percent: float,
-) -> float:
-    """
-    Calculate Dx: minimum dose received by at least x percent of a volume.
-
-    For example, D95 is the 5th percentile of masked dose values.
-
-    Parameters
-    ----------
-    dose : torch.Tensor | np.ndarray
-        3D dose map.
-
-    mask : torch.Tensor | np.ndarray
-        Binary mask selecting the evaluated target/OAR volume.
-
-    volume_percent : float
-        Percent volume used by the Dx definition. D95 corresponds to
-        `volume_percent=95`.
-
-    Returns
-    -------
-    dose_value : float
-        Dose value in the same units as `dose`, usually Gy. Empty masks return
-        NaN.
-
-    Raises
-    ------
-    ValueError
-        If `volume_percent` is outside `[0, 100]`.
-    """
-
-    if volume_percent < 0 or volume_percent > 100:
-        raise ValueError(f"`volume_percent` must be in [0, 100]. Got {volume_percent}")
-
-    return _dose_at_volume_from_values(_masked_dose_values(dose, mask), volume_percent)
-
-
-def volume_at_dose(
-    dose: torch.Tensor | np.ndarray,
-    mask: torch.Tensor | np.ndarray,
-    dose_threshold: float,
-) -> float:
-    """
-    Calculate Vx: percent of a volume receiving at least x Gy.
-
-    Parameters
-    ----------
-    dose : torch.Tensor | np.ndarray
-        3D dose map.
-
-    mask : torch.Tensor | np.ndarray
-        Binary mask selecting the evaluated target/OAR volume.
-
-    dose_threshold : float
-        Dose threshold in the same units as `dose`, usually Gy.
-
-    Returns
-    -------
-    volume_percent : float
-        Percent of masked voxels receiving at least `dose_threshold`. Empty
-        masks return NaN.
-    """
-
-    return _volume_at_dose_from_values(_masked_dose_values(dose, mask), dose_threshold)
-
-
-def mean_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
-    """
-    Calculate mean dose inside a masked volume.
-
-    Parameters
-    ----------
-    dose : torch.Tensor | np.ndarray
-        3D dose map.
-
-    mask : torch.Tensor | np.ndarray
-        Binary mask selecting the evaluated target/OAR volume.
-
-    Returns
-    -------
-    mean_value : float
-        Mean masked dose. Empty masks return NaN.
-    """
-
-    return _mean_dose_from_values(_masked_dose_values(dose, mask))
-
-
-def maximum_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
-    """
-    Calculate maximum dose inside a masked volume.
-
-    Parameters
-    ----------
-    dose : torch.Tensor | np.ndarray
-        3D dose map.
-
-    mask : torch.Tensor | np.ndarray
-        Binary mask selecting the evaluated target/OAR volume.
-
-    Returns
-    -------
-    max_value : float
-        Maximum masked dose. Empty masks return NaN.
-    """
-
-    return _maximum_dose_from_values(_masked_dose_values(dose, mask))
-
-
 def calculate_dose_evaluation_metrics(
-    predicted: dict[str, list[Path]],
-    references: dict[str, list[Path]],
+    predicted: dict[str, Path],
+    references: dict[str, Path],
     config: MaisiTestingConfig,
     model_name: str,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
@@ -332,12 +380,10 @@ def calculate_dose_evaluation_metrics(
     """
     Calculate dose evaluation metrics for predicted-vs-reference doses.
 
-    Dose files and structure label maps are loaded and cached on CPU. Metric
-    reductions run on `config.device`, so CUDA can accelerate masked dose
-    errors, Dx/Vx, mean/max dose, and DVH binning. When CUDA is used and a
-    patient has multiple comparisons, a single background worker prepares the
-    next CPU dose comparison while the current one is evaluated on the metric
-    device, matching the CPU/GPU cooperation pattern used by structure metrics.
+    One predicted dose is paired with one clinical fraction-1 dose per patient.
+    Dose files and structure label maps are loaded on CPU. Metric reductions
+    run on `config.device`, so CUDA can accelerate masked dose errors, Dx/Vx,
+    mean/max dose, and DVH binning.
 
     Outputs:
     - `dose_distribution_metrics.csv`: voxel, mean-dose, and max-dose rows.
@@ -347,11 +393,11 @@ def calculate_dose_evaluation_metrics(
 
     Parameters
     ----------
-    predicted : dict[str, list[Path]]
-        Predicted dose paths grouped by patient ID.
+    predicted : dict[str, Path]
+        Single predicted dose path keyed by patient ID.
 
-    references : dict[str, list[Path]]
-        Reference/ground-truth dose paths grouped by patient ID.
+    references : dict[str, Path]
+        Single clinical fraction-1 dose path keyed by patient ID.
 
     config : MaisiTestingConfig
         Pipeline configuration containing metric device, structure labels,
@@ -389,8 +435,8 @@ def calculate_dose_evaluation_metrics(
 
     logger.info(
         "Calculating dose metrics: "
-        f"{sum(len(paths) for paths in predicted.values())} predicted dose(s), "
-        f"{sum(len(paths) for paths in references.values())} reference dose(s), "
+        f"{len(predicted)} predicted dose(s), "
+        f"{len(references)} reference dose(s), "
         f"labels={config.structure_labels}, metric_device={metric_device}"
     )
 
@@ -497,14 +543,14 @@ def calculate_dose_evaluation_metrics(
                         _metric_row("voxel_rmse", voxel_rmse, 0.0, base),
                         _metric_row(
                             "mean_dose",
-                            _mean_dose_from_values(pred_structure_dose),
-                            _mean_dose_from_values(ref_structure_dose),
+                            mean_dose(pred_dose, pred_mask),
+                            mean_dose(ref_dose, ref_mask),
                             base,
                         ),
                         _metric_row(
                             "maximum_dose",
-                            _maximum_dose_from_values(pred_structure_dose),
-                            _maximum_dose_from_values(ref_structure_dose),
+                            maximum_dose(pred_dose, pred_mask),
+                            maximum_dose(ref_dose, ref_mask),
                             base,
                         ),
                     ]
@@ -514,8 +560,8 @@ def calculate_dose_evaluation_metrics(
                     clinical_rows.append(
                         _metric_row(
                             f"D{volume_percent:g}",
-                            _dose_at_volume_from_values(pred_structure_dose, volume_percent),
-                            _dose_at_volume_from_values(ref_structure_dose, volume_percent),
+                            dose_at_volume(pred_dose, pred_mask, volume_percent),
+                            dose_at_volume(ref_dose, ref_mask, volume_percent),
                             base,
                         )
                     )
@@ -524,14 +570,14 @@ def calculate_dose_evaluation_metrics(
                     clinical_rows.append(
                         _metric_row(
                             f"V{dose_threshold:g}Gy",
-                            _volume_at_dose_from_values(pred_structure_dose, dose_threshold),
-                            _volume_at_dose_from_values(ref_structure_dose, dose_threshold),
+                            volume_at_dose(pred_dose, pred_mask, dose_threshold),
+                            volume_at_dose(ref_dose, ref_mask, dose_threshold),
                             base,
                         )
                     )
 
-                pred_dvh = _dose_volume_histogram_from_values(pred_structure_dose, config.dose_dvh_bin_width)
-                ref_dvh = _dose_volume_histogram_from_values(ref_structure_dose, config.dose_dvh_bin_width)
+                pred_dvh = dose_volume_histogram(pred_dose, pred_mask, config.dose_dvh_bin_width)
+                ref_dvh = dose_volume_histogram(ref_dose, ref_mask, config.dose_dvh_bin_width)
                 # Outer alignment preserves bins present in only one curve;
                 # missing cumulative volume is zero beyond that curve's range.
                 merged_dvh = pred_dvh.merge(ref_dvh, on="dose_gy", how="outer", suffixes=("_predicted", "_reference"))
@@ -549,93 +595,35 @@ def calculate_dose_evaluation_metrics(
                         }
                     )
 
-    for patient_id, pred_paths in tqdm(predicted.items(), desc="Calculating dose metrics"):
-        # Match scenarios by extension-independent filename rather than list
-        # position because directories may contain incomplete scenario sets
-        ref_lookup = _reference_lookup(references.get(patient_id, []))
-        if len(ref_lookup) == 0:
+    for patient_id, pred_path in tqdm(predicted.items(), desc="Calculating dose metrics"):
+        ref_path = references.get(patient_id)
+        if ref_path is None:
             warnings.append(f"Skipping dose metrics for {patient_id}: no reference dose found")
             continue
 
-        comparison_paths: list[tuple[Path, Path]] = []
-        for pred_path in pred_paths:
-            ref_path = ref_lookup.get(_normalised_image_key(pred_path))
-            if ref_path is None:
-                warnings.append(f"Skipping dose metrics for {pred_path}: no matching reference dose found")
-                continue
-            comparison_paths.append((pred_path, ref_path))
-
-        if len(comparison_paths) == 0:
-            continue
-
-        # These caches are patient-scoped: comparisons commonly reuse the same
-        # reference dose, structures, and planning anatomy several times
+        # Keep loader inputs patient-scoped. The shared generated-mask cache can
+        # still reuse structure registration performed by an earlier workflow.
         reference_dose_cache: dict[Path, torch.Tensor] = {}
         structure_cache: dict[Path, torch.Tensor | None] = {}
         planning_ct_cache: dict[str, torch.Tensor] = {}
         planning_label_map_cache: dict[str, torch.Tensor] = {}
         generated_mask_cache: WarpedStructureMaskCache = shared_generated_mask_cache
 
-        if metric_device.type == "cuda" and len(comparison_paths) > 1:
-            # Keep one CPU load ahead of GPU metric calculation. A single
-            # worker avoids concurrent writes to the shared patient caches.
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dose-loading") as executor:
-                next_pred_path, next_ref_path = comparison_paths[0]
-                next_future = executor.submit(
-                    _load_dose_comparison_data,
-                    next_pred_path,
-                    next_ref_path,
-                    patient_id,
-                    dose_transform,
-                    structure_transform,
-                    generated_ct_lookup,
-                    reference_dose_cache,
-                    structure_cache,
-                    planning_ct_cache,
-                    planning_label_map_cache,
-                    generated_mask_cache,
-                    config,
-                )
-
-                for next_index in range(1, len(comparison_paths) + 1):
-                    result = next_future.result()
-                    if next_index < len(comparison_paths):
-                        next_pred_path, next_ref_path = comparison_paths[next_index]
-                        next_future = executor.submit(
-                            _load_dose_comparison_data,
-                            next_pred_path,
-                            next_ref_path,
-                            patient_id,
-                            dose_transform,
-                            structure_transform,
-                            generated_ct_lookup,
-                            reference_dose_cache,
-                            structure_cache,
-                            planning_ct_cache,
-                            planning_label_map_cache,
-                            generated_mask_cache,
-                            config,
-                        )
-
-                    append_metrics_for_comparison(result, patient_id)
-
-        else:
-            for pred_path, ref_path in comparison_paths:
-                result = _load_dose_comparison_data(
-                    pred_path=pred_path,
-                    ref_path=ref_path,
-                    patient_id=patient_id,
-                    dose_transform=dose_transform,
-                    structure_transform=structure_transform,
-                    generated_ct_lookup=generated_ct_lookup,
-                    reference_dose_cache=reference_dose_cache,
-                    structure_cache=structure_cache,
-                    planning_ct_cache=planning_ct_cache,
-                    planning_label_map_cache=planning_label_map_cache,
-                    generated_mask_cache=generated_mask_cache,
-                    config=config,
-                )
-                append_metrics_for_comparison(result, patient_id)
+        result = _load_dose_comparison_data(
+            pred_path=pred_path,
+            ref_path=ref_path,
+            patient_id=patient_id,
+            dose_transform=dose_transform,
+            structure_transform=structure_transform,
+            generated_ct_lookup=generated_ct_lookup,
+            reference_dose_cache=reference_dose_cache,
+            structure_cache=structure_cache,
+            planning_ct_cache=planning_ct_cache,
+            planning_label_map_cache=planning_label_map_cache,
+            generated_mask_cache=generated_mask_cache,
+            config=config,
+        )
+        append_metrics_for_comparison(result, patient_id)
 
     for message in info_messages:
         logger.info(message)
@@ -705,8 +693,8 @@ def evaluate_predicted_doses(
         dose structure metrics.
     """
 
-    predicted = _collect_dose_distributions(config.predicted_dose_dir)
-    references = _collect_dose_distributions(config.reference_dose_dir)
+    predicted = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
+    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
 
     calculate_dose_evaluation_metrics(
         predicted=predicted,
