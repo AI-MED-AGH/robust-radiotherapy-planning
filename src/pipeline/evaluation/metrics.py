@@ -52,8 +52,8 @@ def evaluate_doses(
 
     # Every dose workflow needs the clinical dose set, including the smoke
     # test that intentionally runs without model predictions
-    if not _contains_dose_files(config.reference_dose_dir):
-        logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.reference_dose_dir)
+    if not _contains_dose_files(config.dose_root):
+        logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
         return
 
     if config.use_base_dose_smoke_test:

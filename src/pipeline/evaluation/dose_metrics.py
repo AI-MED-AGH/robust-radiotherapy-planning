@@ -259,7 +259,7 @@ def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
     """
 
     candidates = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
-    clinical_doses = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
+    clinical_doses = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
     dose_transform = _get_dose_transform(config)
     structure_transform = _get_structure_label_transform(config)
     rows: list[dict[str, Any]] = []
@@ -322,14 +322,14 @@ def evaluate_scenario_robustness(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
+    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
     predicted = (
         _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
         if _contains_dose_files(config.predicted_dose_dir)
         else {}
     )
-    rows = _evaluate_dose_on_real_structures(predicted, references, config, config.dose_model_name)
-    rows.extend(_evaluate_dose_on_generated_structures(predicted, references, config, config.dose_model_name, cache))
+    rows = _evaluate_dose_on_real_structures(predicted, references, config, "candidate")
+    rows.extend(_evaluate_dose_on_generated_structures(predicted, references, config, "candidate", cache))
     _write_scenario_outputs(rows, config, "scenario_robustness")
 
 
@@ -356,7 +356,7 @@ def evaluate_base_dose_smoke_test(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
+    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
     # Keep the clinical planning dose fixed while evaluating original, observed
     # follow-up, and generated-anatomy structure masks
     rows = _evaluate_dose_on_real_structures(
@@ -374,7 +374,6 @@ def calculate_dose_evaluation_metrics(
     predicted: dict[str, Path],
     references: dict[str, Path],
     config: MaisiTestingConfig,
-    model_name: str,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
     """
@@ -389,7 +388,7 @@ def calculate_dose_evaluation_metrics(
     - `dose_distribution_metrics.csv`: voxel, mean-dose, and max-dose rows.
     - `dose_clinical_metrics.csv`: Dx and Vx rows.
     - `dose_dvh.csv`: cumulative DVH rows for plotting or downstream analysis.
-    - summary CSVs grouped by model, patient, structure label, and metric.
+    - summary CSVs grouped by patient, structure label, and metric.
 
     Parameters
     ----------
@@ -402,9 +401,6 @@ def calculate_dose_evaluation_metrics(
     config : MaisiTestingConfig
         Pipeline configuration containing metric device, structure labels,
         dose metric settings, and output paths.
-
-    model_name : str
-        Name written to output rows for the evaluated model or baseline.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
         Optional cache produced by structure metrics. When provided, dose
@@ -526,7 +522,6 @@ def calculate_dose_evaluation_metrics(
                     voxel_mae, voxel_rmse = float("nan"), float("nan")
 
                 base = {
-                    "model_name": model_name,
                     "patient_id": current_patient_id,
                     "comparison_type": "predicted_dose_vs_reference_dose",
                     "predicted_path": str(result.pred_path),
@@ -642,7 +637,7 @@ def calculate_dose_evaluation_metrics(
         logger.info("Saved dose distribution metrics: %s", distribution_path)
 
         # Keep the whole-volume group (`structure_label=None`) in summaries
-        summary = distribution_df.groupby(["model_name", "patient_id", "structure_label", "metric"], dropna=False)[
+        summary = distribution_df.groupby(["patient_id", "structure_label", "metric"], dropna=False)[
             ["difference", "absolute_difference"]
         ].agg(["mean", "std", "min", "max", "count"])
         summary_path = config.metrics_dir / "dose_distribution_summary.csv"
@@ -657,7 +652,7 @@ def calculate_dose_evaluation_metrics(
 
         # Use the same grouping contract as distribution metrics so downstream
         # consumers can join both summary tables directly
-        summary = clinical_df.groupby(["model_name", "patient_id", "structure_label", "metric"], dropna=False)[
+        summary = clinical_df.groupby(["patient_id", "structure_label", "metric"], dropna=False)[
             ["difference", "absolute_difference"]
         ].agg(["mean", "std", "min", "max", "count"])
         summary_path = config.metrics_dir / "dose_clinical_summary.csv"
@@ -694,12 +689,11 @@ def evaluate_predicted_doses(
     """
 
     predicted = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
-    references = _collect_single_dose_per_patient(config.reference_dose_dir, planning_only=True)
+    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
 
     calculate_dose_evaluation_metrics(
         predicted=predicted,
         references=references,
         config=config,
-        model_name=config.dose_model_name,
         warped_mask_cache=warped_mask_cache,
     )

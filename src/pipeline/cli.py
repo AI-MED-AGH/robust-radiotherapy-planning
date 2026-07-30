@@ -39,9 +39,15 @@ def parse_args() -> argparse.Namespace:
         - no_lpips
         - no_dose_metrics
         - no_dose_structure_warping
+        - scenario_robustness
+        - original_anatomy_comparison
+        - no_base_dose_smoke_test
+        - dose_dvh_bin_width
+        - dose_dx_volume_percents
+        - dose_vx_thresholds
         - generated_ct_dir
         - predicted_dose_dir
-        - reference_dose_dir
+        - dose_root
         - warped_structure_cache_dir
         - processed_ct_dir
         - metrics_dir
@@ -154,10 +160,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--reference-dose-dir",
+        "--dose-root",
         type=Path,
         default=None,
-        help="Optional override for reference/ground-truth dose directory",
+        help="Optional override for reference/ground-truth dose root",
     )
 
     parser.add_argument(
@@ -165,13 +171,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional override for persisted warped structure mask cache directory",
-    )
-
-    parser.add_argument(
-        "--dose-model-name",
-        type=str,
-        default=None,
-        help="Model or baseline name written to dose metric outputs",
     )
 
     parser.add_argument(
@@ -269,14 +268,11 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     if args.predicted_dose_dir is not None:
         config_kwargs["predicted_dose_dir"] = args.predicted_dose_dir
 
-    if args.reference_dose_dir is not None:
-        config_kwargs["reference_dose_dir"] = args.reference_dose_dir
+    if args.dose_root is not None:
+        config_kwargs["dose_root"] = args.dose_root
 
     if args.warped_structure_cache_dir is not None:
         config_kwargs["warped_structure_cache_dir"] = args.warped_structure_cache_dir
-
-    if args.dose_model_name is not None:
-        config_kwargs["dose_model_name"] = args.dose_model_name
 
     if args.dose_dvh_bin_width is not None:
         config_kwargs["dose_dvh_bin_width"] = args.dose_dvh_bin_width
@@ -318,7 +314,8 @@ def run_stage(
     - encode: encode processed planning CTs into latent space
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
-    - all: run prepare, encode, generate, and evaluate in sequence
+    - dose-evaluate: calculate dose metrics
+    - all: run prepare, encode, generate, evaluate, and dose-evaluate in sequence
 
     Parameters
     ----------
@@ -354,6 +351,7 @@ def run_stage(
         encode_latents(config)
         generate_ct_variants(config)
         evaluate_generated_cts(config)
+        evaluate_doses(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")

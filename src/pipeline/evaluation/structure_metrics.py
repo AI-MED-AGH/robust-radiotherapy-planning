@@ -170,8 +170,7 @@ def calculate_structure_similarity_metrics(
     -------
     warped_mask_cache : WarpedStructureMaskCache
         CPU cache of warped generated-space masks keyed by generated CT path.
-        Empty when structure metrics are disabled or no valid registrations
-        are produced.
+        Empty when no valid registrations are produced.
 
     Raises
     ------
@@ -179,10 +178,6 @@ def calculate_structure_similarity_metrics(
         If structure metrics are configured to run tensor operations on CUDA
         but CUDA is not available.
     """
-
-    if not config.use_structure_metrics:
-        logger.info("Skipping structure metrics: disabled by configuration")
-        return warped_mask_cache if warped_mask_cache is not None else {}
 
     if warped_mask_cache is None:
         warped_mask_cache = {}
@@ -334,8 +329,7 @@ def calculate_structure_similarity_metrics(
                             }
                         )
 
-                if all(label in generated_masks for label in config.structure_labels):
-                    _save_warped_structure_masks(config, result.gen_path, generated_masks)
+                _save_warped_structure_masks(config, result.gen_path, generated_masks)
 
         if metric_device.type == "cuda" and len(gen_paths) > 1:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:

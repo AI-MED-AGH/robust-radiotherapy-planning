@@ -86,9 +86,6 @@ class MaisiTestingConfig:
         Directory containing model-predicted dose distributions to compare
         against reference doses.
 
-    reference_dose_dir : Path
-        Directory containing reference/ground-truth dose distributions.
-
     warped_structure_cache_dir : Path
         Directory containing persisted planning structure masks warped into
         generated CT space. This cache lets independent dose-only evaluation
@@ -179,11 +176,6 @@ class MaisiTestingConfig:
         Whether to compare a candidate dose with the clinical dose on the
         original fraction-1 structures. Disabled by default.
 
-    dose_model_name : str
-        Name written to dose metric outputs for the evaluated prediction
-        source. This lets future baselines, such as PCA/OpenTPS, share the
-        same evaluator.
-
     dose_dvh_bin_width : float
         Dose-bin width in Gy for cumulative DVH output.
 
@@ -263,7 +255,6 @@ class MaisiTestingConfig:
     latent_ct_dir: Path = output_root / "latents" / "test"
     generated_ct_dir: Path = output_root / "generated_ct" / "test"
     predicted_dose_dir: Path = output_root / "predicted_dose" / "test"
-    reference_dose_dir: Path = dose_root
     warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / "test"
     metrics_dir: Path = output_root / "metrics" / "test"
     logs_dir: Path = output_root / "logs"
@@ -323,7 +314,6 @@ class MaisiTestingConfig:
     use_base_dose_smoke_test: bool = True
     use_scenario_robustness: bool = False
     use_original_anatomy_comparison: bool = False
-    dose_model_name: str = "prediction"
     dose_dvh_bin_width: float = 1.0
     dose_dx_volume_percents: list[float] = field(default_factory=lambda: [2.0, 5.0, 50.0, 95.0, 98.0])
     dose_vx_thresholds: list[float] = field(default_factory=lambda: [5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0])
@@ -433,11 +423,11 @@ class MaisiTestingConfig:
         if not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
-        if self.use_structure_metrics and not self.structures_root.exists():
+        if (self.use_structure_metrics or self.use_dose_metrics) and not self.structures_root.exists():
             raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
 
-        if self.use_dose_metrics and not self.structures_root.exists():
-            raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
+        if self.use_dose_metrics and not self.dose_root.exists():
+            raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
 
         if not self.data_dict_path.exists():
             raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
@@ -570,9 +560,6 @@ class MaisiTestingConfig:
 
         if any(value < 0 for value in self.structure_registration_smoothing_sigmas):
             raise ValueError("All `structure_registration_smoothing_sigmas` values must be non-negative")
-
-        if self.dose_model_name.strip() == "":
-            raise ValueError("`dose_model_name` cannot be empty")
 
         if self.dose_dvh_bin_width <= 0:
             raise ValueError("`dose_dvh_bin_width` must be greater than 0")
