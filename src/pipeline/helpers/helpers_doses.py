@@ -28,7 +28,6 @@ from src.pipeline.helpers.helpers import (
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _calculate_structure_registration_result,
-    _get_structure_label_transform,
     _label_to_binary_mask,
     _load_structure_label_map,
     _load_warped_structure_masks,
@@ -476,50 +475,6 @@ def _contains_dose_files(directory: Path) -> bool:
     )
 
 
-def _clinical_metric_values(
-    dose: torch.Tensor,
-    mask: torch.Tensor,
-    config: MaisiTestingConfig,
-) -> dict[str, float]:
-    """Calculate configured clinical metrics inside one structure mask.
-
-    Parameters
-    ----------
-    dose : torch.Tensor
-        Three-dimensional dose distribution in physical dose units.
-
-    mask : torch.Tensor
-        Boolean or binary structure mask on the same grid as ``dose``.
-
-    config : MaisiTestingConfig
-        Configuration providing the requested Dx volume percentages and Vx
-        dose thresholds.
-
-    Returns
-    -------
-    metrics : dict[str, float]
-        Metric names mapped to mean dose, maximum dose, configured Dx values,
-        and configured Vx percentages.
-    """
-
-    # Imported at call time because dose_metrics imports this helpers module.
-    # Deferring the reverse dependency avoids a module-initialization cycle
-    # while keeping the public metric formulas defined in dose_metrics.py.
-    from src.pipeline.evaluation.dose_metrics import dose_at_volume, maximum_dose, mean_dose, volume_at_dose
-
-    metrics = {
-        "mean_dose": mean_dose(dose, mask),
-        "maximum_dose": maximum_dose(dose, mask),
-    }
-    for volume in config.dose_dx_volume_percents:
-        metrics[f"D{volume:g}"] = dose_at_volume(dose, mask, volume)
-
-    for threshold in config.dose_vx_thresholds:
-        metrics[f"V{threshold:g}Gy"] = volume_at_dose(dose, mask, threshold)
-
-    return metrics
-
-
 def _planning_masks_for_dose(
     dose_path: Path,
     structure_transform: Compose,
@@ -555,54 +510,6 @@ def _planning_masks_for_dose(
     return {label: _label_to_binary_mask(label_map, label) for label in config.structure_labels}
 
 
-def _append_single_dose_rows(
-    rows: list[dict[str, Any]],
-    dose: torch.Tensor,
-    masks: dict[int, torch.Tensor],
-    config: MaisiTestingConfig,
-    metadata: dict[str, Any],
-) -> None:
-    """Append long-form metrics for one dose and a set of structures.
-
-    Parameters
-    ----------
-    rows : list[dict[str, Any]]
-        Mutable output row collection updated in place.
-
-    dose : torch.Tensor
-        Three-dimensional dose distribution.
-
-    masks : dict[int, torch.Tensor]
-        Structure masks keyed by integer label.
-
-    config : MaisiTestingConfig
-        Configuration defining clinical metrics.
-
-    metadata : dict[str, Any]
-        Scenario metadata copied into every appended row.
-
-    Returns
-    -------
-    None
-        Rows are appended to ``rows`` in place. Shape-mismatched masks are
-        logged and skipped.
-    """
-
-    for label, mask in masks.items():
-        # A shape mismatch makes both masking and clinical interpretation
-        # invalid for this structure, but should not discard other scenarios
-        if dose.shape != mask.shape:
-            logger.warning(
-                "Skipping dose metrics for %s: dose %s vs mask %s",
-                metadata.get("scenario_id", metadata.get("patient_id")),
-                tuple(dose.shape),
-                tuple(mask.shape),
-            )
-            continue
-        for metric, value in _clinical_metric_values(dose, mask, config).items():
-            rows.append({**metadata, "structure_label": label, "metric": metric, "value": value})
-
-
 def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConfig, stem: str) -> None:
     """Write detailed scenario metrics and their across-scenario summary.
 
@@ -622,19 +529,28 @@ def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConf
     None
         CSV files are written under ``config.metrics_dir``. Empty inputs are
         logged and produce no files.
+
+    Raises
+    ------
+    ValueError
+        If non-empty input rows omit columns required for the scenario
+        summary.
     """
 
     if not rows:
         logger.warning("Skipping %s: no valid dose/anatomy scenarios", stem)
         return
+
     frame = pd.DataFrame(rows)
+    group_columns = ["dose_source", "patient_id", "scenario_type", "structure_label", "metric"]
+    required_columns = [*group_columns, "value"]
+    missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        raise ValueError(f"Cannot write {stem} scenario outputs: missing required columns {missing_columns}")
+
     frame.to_csv(config.metrics_dir / f"{stem}.csv", index=False)
     summary = (
-        frame.groupby(["dose_source", "patient_id", "scenario_type", "structure_label", "metric"], dropna=False)[
-            "value"
-        ]
-        .agg(["mean", "std", "min", "max", "count"])
-        .reset_index()
+        frame.groupby(group_columns, dropna=False)["value"].agg(["mean", "std", "min", "max", "count"]).reset_index()
     )
     summary.to_csv(config.metrics_dir / f"{stem}_summary.csv", index=False)
 
@@ -656,6 +572,15 @@ def _write_smoke_test_outputs(rows: list[dict[str, Any]], config: MaisiTestingCo
         Detailed and summary CSV files are written under
         ``config.metrics_dir``. Relative differences are undefined when the
         original value is zero.
+
+    Raises
+    ------
+    KeyError
+        If non-empty input rows omit a column required for comparison.
+
+    pandas.errors.MergeError
+        If more than one original-anatomy row exists for the same patient,
+        structure label, and metric.
     """
 
     if not rows:
@@ -717,151 +642,6 @@ def _select_dose_for_anatomy(
         return clinical_path, "clinical_fraction_1_fallback"
 
     return None, "none"
-
-
-def _evaluate_dose_on_real_structures(
-    dose_groups: dict[str, Path],
-    reference_groups: dict[str, Path],
-    config: MaisiTestingConfig,
-    dose_source: str,
-    force_clinical: bool = False,
-) -> list[dict[str, Any]]:
-    """Evaluate selected doses on every available real-fraction structure map."""
-
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
-    real_ct_paths = sorted(config.processed_ct_dir.rglob("*.pt"))
-    rows: list[dict[str, Any]] = []
-
-    for ct_path in real_ct_paths:
-        patient_id = _extract_patient_id(ct_path)
-        dose_path, selected_source = _select_dose_for_anatomy(
-            patient_dose=dose_groups.get(patient_id),
-            clinical_path=reference_groups.get(patient_id),
-            dose_source=dose_source,
-            force_clinical=force_clinical,
-        )
-        if dose_path is None:
-            logger.warning("Skipping real-anatomy dose metrics for %s: no dose found", ct_path)
-            continue
-
-        structure_path = _structure_path_for_ct(ct_path, config)
-        if not structure_path.exists():
-            logger.warning("Skipping real-anatomy dose metrics for %s: missing %s", ct_path, structure_path)
-            continue
-
-        dose = _load_dose_distribution(dose_path, dose_transform)
-        label_map = _load_structure_label_map(structure_path, structure_transform)
-        masks = {label: _label_to_binary_mask(label_map, label) for label in config.structure_labels}
-        scenario_type = "original_anatomy" if _is_planning_ct_path(ct_path) else "real_fraction_anatomy"
-        _append_single_dose_rows(
-            rows,
-            dose,
-            masks,
-            config,
-            {
-                "dose_source": selected_source,
-                "patient_id": patient_id,
-                "scenario_id": _normalised_image_key(ct_path),
-                "scenario_type": scenario_type,
-                "dose_path": str(dose_path),
-                "structure_source": str(structure_path),
-            },
-        )
-
-    return rows
-
-
-def _evaluate_dose_on_generated_structures(
-    dose_groups: dict[str, Path],
-    reference_groups: dict[str, Path],
-    config: MaisiTestingConfig,
-    dose_source: str,
-    warped_mask_cache: WarpedStructureMaskCache,
-) -> list[dict[str, Any]]:
-    """Evaluate each patient's single selected dose on generated structures.
-
-    Parameters
-    ----------
-    dose_groups : dict[str, Path]
-        Single candidate dose path keyed by patient identifier.
-
-    reference_groups : dict[str, Path]
-        Single clinical fraction-1 dose path keyed by patient identifier.
-
-    config : MaisiTestingConfig
-        Configuration containing generated CT, structure, and metric settings.
-
-    dose_source : str
-        Source name recorded in every output row. ``"base_fraction_1"`` makes
-        the clinical fraction-1 dose the patient-level fallback.
-
-    warped_mask_cache : WarpedStructureMaskCache
-        Reusable generated-space masks keyed by generated CT path.
-
-    Returns
-    -------
-    rows : list[dict[str, Any]]
-        Long-form clinical metric records for valid generated scenarios.
-    """
-
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
-    generated_lookup = _generated_ct_lookup(config)
-    generated_by_patient: dict[str, list[Path]] = {}
-    # Re-group the flat scenario lookup so each patient's single dose can be
-    # evaluated on every generated anatomy belonging to that patient.
-    for generated_path in generated_lookup.values():
-        generated_by_patient.setdefault(_extract_patient_id(generated_path), []).append(generated_path)
-
-    rows: list[dict[str, Any]] = []
-    for patient_id, generated_paths in generated_by_patient.items():
-        patient_dose = dose_groups.get(patient_id)
-        planning_ct_cache: dict[str, torch.Tensor] = {}
-        planning_label_map_cache: dict[str, torch.Tensor] = {}
-        for generated_path in sorted(generated_paths):
-            # Use the same patient-dose/clinical-fallback policy for generated
-            # and observed real anatomies.
-            scenario_dose_path, selected_source = _select_dose_for_anatomy(
-                patient_dose=patient_dose,
-                clinical_path=reference_groups.get(patient_id),
-                dose_source=dose_source,
-                force_clinical=dose_source == "base_fraction_1",
-            )
-            if scenario_dose_path is None:
-                logger.warning("Skipping %s: no patient-level dose found", generated_path)
-                continue
-            dose = _load_dose_distribution(scenario_dose_path, dose_transform)
-            masks, mask_source, _, warning = _warp_planning_masks_for_predicted_dose(
-                pred_path=generated_path,
-                pred_dose=dose,
-                patient_id=patient_id,
-                generated_ct_lookup=generated_lookup,
-                structure_transform=structure_transform,
-                planning_ct_cache=planning_ct_cache,
-                planning_label_map_cache=planning_label_map_cache,
-                generated_mask_cache=warped_mask_cache,
-                config=config,
-            )
-            if warning is not None:
-                logger.warning(warning)
-            if masks is None:
-                continue
-            _append_single_dose_rows(
-                rows,
-                dose,
-                masks,
-                config,
-                {
-                    "dose_source": selected_source,
-                    "patient_id": patient_id,
-                    "scenario_id": _normalised_image_key(generated_path),
-                    "scenario_type": "generated_anatomy",
-                    "dose_path": str(scenario_dose_path),
-                    "structure_source": mask_source,
-                },
-            )
-    return rows
 
 
 def _warp_planning_masks_for_predicted_dose(
@@ -1104,7 +884,7 @@ def _load_dose_comparison_data(
         reference_dose_cache[ref_path] = ref_dose
 
     # Overall voxel metrics require identical grids; represent this expected
-    # data issue in the result so the outer patient loop can continue
+    # data issue in the result so the outer patient loop can continue.
     if pred_dose.shape != ref_dose.shape:
         return _DoseComparisonData(
             pred_path=pred_path,
