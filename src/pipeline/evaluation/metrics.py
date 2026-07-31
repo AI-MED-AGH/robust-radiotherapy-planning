@@ -3,19 +3,88 @@ import logging
 from pathlib import Path
 
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.evaluation.dose_metrics import (
+    evaluate_base_dose_smoke_test,
+    evaluate_original_anatomy_comparison,
+    evaluate_predicted_doses,
+    evaluate_scenario_robustness,
+)
 from src.pipeline.evaluation.image_metrics import (
     calculate_pairwise_variety_metrics,
     calculate_similarity_metrics,
 )
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.cleanup import clear_directory_contents
-from src.pipeline.helpers.helpers import (
-    _build_lpips_model,
-    _clean_pipeline_memory,
-    _extract_patient_id,
-)
+from src.pipeline.helpers.helpers import _clean_pipeline_memory, _extract_patient_id
+from src.pipeline.helpers.helpers_doses import _contains_dose_files
+from src.pipeline.helpers.helpers_metrics import _build_lpips_model
+from src.pipeline.helpers.helpers_structures import WarpedStructureMaskCache
 
 logger = logging.getLogger(__name__)
+
+
+def evaluate_doses(
+    config: MaisiTestingConfig,
+    warped_mask_cache: WarpedStructureMaskCache | None = None,
+) -> None:
+    """Validate dose inputs and dispatch the configured evaluation workflows.
+
+    The function always checks whether dose evaluation is enabled and whether
+    clinical dose files are available. It can then run the base-dose smoke
+    test, predicted-vs-reference metrics, scenario robustness evaluation, and
+    original-anatomy comparison according to ``config``. Missing predicted
+    doses skip only workflows that require predictions.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing workflow flags, dose directories,
+        metric settings, structure labels, and output paths.
+
+    warped_mask_cache : WarpedStructureMaskCache | None, optional
+        Generated-space structure masks produced during structure evaluation.
+        Reusing this cache avoids repeating planning-to-generated registration.
+    """
+
+    if not config.use_dose_metrics:
+        logger.info("Skipping dose metrics: disabled by configuration")
+        return
+
+    # Every dose workflow needs the clinical dose set, including the smoke
+    # test that intentionally runs without model predictions
+    if not _contains_dose_files(config.dose_root):
+        logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
+        return
+
+    if config.use_base_dose_smoke_test:
+        logger.info("Calculating fraction-1 base-dose smoke-test metrics")
+        evaluate_base_dose_smoke_test(config, warped_mask_cache=warped_mask_cache)
+    else:
+        logger.info("Skipping base-dose smoke test: disabled by configuration")
+
+    has_predicted_doses = _contains_dose_files(config.predicted_dose_dir)
+    if not has_predicted_doses:
+        logger.info(
+            "No predicted doses found in %s; scenario robustness will use the clinical fallback if enabled",
+            config.predicted_dose_dir,
+        )
+    else:
+        logger.info("Calculating predicted-vs-reference dose metrics")
+        evaluate_predicted_doses(config, warped_mask_cache=warped_mask_cache)
+
+    if config.use_scenario_robustness:
+        logger.info("Calculating scenario robustness metrics")
+        evaluate_scenario_robustness(config, warped_mask_cache=warped_mask_cache)
+    else:
+        logger.info("Skipping scenario robustness metrics: disabled by configuration")
+
+    if config.use_original_anatomy_comparison and has_predicted_doses:
+        logger.info("Calculating original-anatomy dose comparison")
+        evaluate_original_anatomy_comparison(config)
+    elif config.use_original_anatomy_comparison:
+        logger.info("Skipping original-anatomy dose comparison: no predicted doses found")
+    else:
+        logger.info("Skipping original-anatomy dose comparison: disabled by configuration")
 
 
 def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
@@ -76,6 +145,7 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
 
     originals: dict[str, list[Path]] = {}
 
+    # setdefault keeps discovery tolerant of sparse and uneven patient sets
     for path in paths:
         patient_id = _extract_patient_id(path)
         originals.setdefault(patient_id, []).append(Path(path))
@@ -147,6 +217,8 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
 
     generated: dict[str, list[Path]] = {}
 
+    # Preserve every generated variant; later metric stages decide which
+    # patient/scenario pairs have a corresponding reference
     for path in paths:
         patient_id = _extract_patient_id(path)
         generated.setdefault(patient_id, []).append(Path(path))
@@ -180,9 +252,6 @@ def evaluate_generated_cts(
     config : MaisiTestingConfig
         Configuration object containing evaluation settings.
 
-    use_lpips : bool
-        Whether to calculate LPIPS.
-
     Raises
     ------
     FileNotFoundError
@@ -197,6 +266,8 @@ def evaluate_generated_cts(
 
     clear_directory_contents(config.metrics_dir)
 
+    # Collect once and pass the same grouping to all image/structure stages so
+    # they evaluate an identical snapshot of the available files
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir)
     lpips_model = _build_lpips_model(config)
@@ -215,15 +286,23 @@ def evaluate_generated_cts(
         config=config,
         lpips_model=lpips_model,
     )
+    # Release metric tensors before registration and structure processing,
+    # which can also have substantial CPU and GPU memory footprints
     _clean_pipeline_memory()
 
-    logger.info("Calculating generated-vs-real structure metrics")
-    calculate_structure_similarity_metrics(
-        generated=generated,
-        originals=originals,
-        config=config,
-    )
-    _clean_pipeline_memory()
+    # Structure evaluation returns generated-space masks keyed by CT path.
+    # Dose evaluation consumes the same cache later when enabled.
+    warped_mask_cache = {}
+    if config.use_structure_metrics:
+        logger.info("Calculating generated-vs-real structure metrics")
+        warped_mask_cache = calculate_structure_similarity_metrics(
+            generated=generated,
+            originals=originals,
+            config=config,
+        )
+        _clean_pipeline_memory()
+    else:
+        logger.info("Skipping generated-vs-real structure metrics: disabled by configuration")
 
     logger.info("Calculating generated pairwise variety metrics")
     calculate_pairwise_variety_metrics(
@@ -231,6 +310,11 @@ def evaluate_generated_cts(
         config=config,
         lpips_model=lpips_model,
     )
+    _clean_pipeline_memory()
+
+    # Dose orchestration remains last because it can reuse warped masks while
+    # independently deciding which optional dose workflows are configured
+    evaluate_doses(config, warped_mask_cache=warped_mask_cache)
     _clean_pipeline_memory()
 
     logger.info("Finished evaluation")

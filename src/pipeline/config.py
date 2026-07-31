@@ -52,6 +52,9 @@ class MaisiTestingConfig:
         Directory containing patient structure-label folders used for
         structure-based evaluation metrics.
 
+    dose_root : Path
+        Directory containing ground-truth/reference dose distributions.
+
     data_dict_path : Path
         Path to the dataset split JSON file.
 
@@ -78,6 +81,15 @@ class MaisiTestingConfig:
 
     metrics_dir : Path
         Directory containing evaluation metrics.
+
+    predicted_dose_dir : Path
+        Directory containing model-predicted dose distributions to compare
+        against reference doses.
+
+    warped_structure_cache_dir : Path
+        Directory containing persisted planning structure masks warped into
+        generated CT space. This cache lets independent dose-only evaluation
+        reuse DVF work produced by structure metrics.
 
     logs_dir : Path
         Directory containing pipeline logs.
@@ -147,6 +159,36 @@ class MaisiTestingConfig:
         Integer label values identifying the structures to include in
         structure-based metrics.
 
+    use_dose_metrics : bool
+        Parent switch for all dose workflows. When false, the base-dose smoke
+        test and every predicted-dose evaluation are disabled.
+
+    use_base_dose_smoke_test : bool
+        Whether to evaluate the clinical fraction-1 dose on the original and
+        generated-anatomy structures. Enabled by default and does not require
+        predicted doses.
+
+    use_scenario_robustness : bool
+        Whether to evaluate candidate doses across generated anatomies when
+        predicted doses are available. Disabled by default.
+
+    use_original_anatomy_comparison : bool
+        Whether to compare a candidate dose with the clinical dose on the
+        original fraction-1 structures. Disabled by default.
+
+    dose_dvh_bin_width : float
+        Dose-bin width in Gy for cumulative DVH output.
+
+    dose_dx_volume_percents : list[float]
+        Volume percentages used for Dx metrics.
+
+    dose_vx_thresholds : list[float]
+        Dose thresholds in Gy used for Vx metrics.
+
+    use_dose_structure_warping : bool
+        Whether dose metrics should try to warp planning structures into
+        generated-dose space when a matching generated CT is available.
+
     structure_registration_iterations : int
         Number of iterations used by the demons registration filter when
         aligning fixed and generated CTs for structure evaluation.
@@ -201,6 +243,7 @@ class MaisiTestingConfig:
     data_root: Path = Path("src/data_full")
     ct_root: Path = data_root / "CT"
     structures_root: Path = data_root / "STRUCTURES"
+    dose_root: Path = data_root / "DOSES"
     data_dict_path: Path = data_root / "data_dict.json"
 
     # Output paths
@@ -211,6 +254,8 @@ class MaisiTestingConfig:
     processed_ct_dir: Path = output_root / "processed_ct" / "test"
     latent_ct_dir: Path = output_root / "latents" / "test"
     generated_ct_dir: Path = output_root / "generated_ct" / "test"
+    predicted_dose_dir: Path = output_root / "predicted_dose" / "test"
+    warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / "test"
     metrics_dir: Path = output_root / "metrics" / "test"
     logs_dir: Path = output_root / "logs"
 
@@ -264,6 +309,16 @@ class MaisiTestingConfig:
     structure_registration_shrink_factors: list[float] = field(default_factory=lambda: [16, 8, 4, 2])
     structure_registration_smoothing_sigmas: list[float] = field(default_factory=lambda: [16, 8, 4, 2])
 
+    # Dose metric arguments
+    use_dose_metrics: bool = True
+    use_base_dose_smoke_test: bool = True
+    use_scenario_robustness: bool = False
+    use_original_anatomy_comparison: bool = False
+    dose_dvh_bin_width: float = 1.0
+    dose_dx_volume_percents: list[float] = field(default_factory=lambda: [2.0, 5.0, 50.0, 95.0, 98.0])
+    dose_vx_thresholds: list[float] = field(default_factory=lambda: [5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0])
+    use_dose_structure_warping: bool = True
+
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict[str, Any] | None = None
     rflow_config: dict[str, Any] | None = None
@@ -315,6 +370,8 @@ class MaisiTestingConfig:
         default_processed_ct_dir = self.output_root / "processed_ct" / "test"
         default_latent_ct_dir = self.output_root / "latents" / "test"
         default_generated_ct_dir = self.output_root / "generated_ct" / "test"
+        default_predicted_dose_dir = self.output_root / "predicted_dose" / "test"
+        default_warped_structure_cache_dir = self.output_root / "warped_structure_masks" / "test"
         default_metrics_dir = self.output_root / "metrics" / "test"
 
         if self.processed_ct_dir == default_processed_ct_dir:
@@ -325,6 +382,12 @@ class MaisiTestingConfig:
 
         if self.generated_ct_dir == default_generated_ct_dir:
             self.generated_ct_dir = self.output_root / "generated_ct" / self.evaluation_split
+
+        if self.predicted_dose_dir == default_predicted_dose_dir:
+            self.predicted_dose_dir = self.output_root / "predicted_dose" / self.evaluation_split
+
+        if self.warped_structure_cache_dir == default_warped_structure_cache_dir:
+            self.warped_structure_cache_dir = self.output_root / "warped_structure_masks" / self.evaluation_split
 
         if self.metrics_dir == default_metrics_dir:
             self.metrics_dir = self.output_root / "metrics" / self.evaluation_split
@@ -338,6 +401,8 @@ class MaisiTestingConfig:
         self.processed_ct_dir.mkdir(parents=True, exist_ok=True)
         self.latent_ct_dir.mkdir(parents=True, exist_ok=True)
         self.generated_ct_dir.mkdir(parents=True, exist_ok=True)
+        self.predicted_dose_dir.mkdir(parents=True, exist_ok=True)
+        self.warped_structure_cache_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -358,8 +423,11 @@ class MaisiTestingConfig:
         if not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
-        if self.use_structure_metrics and not self.structures_root.exists():
+        if (self.use_structure_metrics or self.use_dose_metrics) and not self.structures_root.exists():
             raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
+
+        if self.use_dose_metrics and not self.dose_root.exists():
+            raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
 
         if not self.data_dict_path.exists():
             raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
@@ -492,6 +560,23 @@ class MaisiTestingConfig:
 
         if any(value < 0 for value in self.structure_registration_smoothing_sigmas):
             raise ValueError("All `structure_registration_smoothing_sigmas` values must be non-negative")
+
+        if self.dose_dvh_bin_width <= 0:
+            raise ValueError("`dose_dvh_bin_width` must be greater than 0")
+
+        if len(self.dose_dx_volume_percents) == 0:
+            raise ValueError("`dose_dx_volume_percents` cannot be empty")
+
+        if any(value < 0 or value > 100 for value in self.dose_dx_volume_percents):
+            raise ValueError(
+                f"`dose_dx_volume_percents` values must be in [0, 100]. Got {self.dose_dx_volume_percents}"
+            )
+
+        if len(self.dose_vx_thresholds) == 0:
+            raise ValueError("`dose_vx_thresholds` cannot be empty")
+
+        if any(value < 0 for value in self.dose_vx_thresholds):
+            raise ValueError(f"`dose_vx_thresholds` values must be non-negative. Got {self.dose_vx_thresholds}")
 
     def _set_default_vae_config(self) -> None:
         """

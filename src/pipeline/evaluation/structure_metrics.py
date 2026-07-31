@@ -9,14 +9,15 @@ import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import (
+from src.pipeline.helpers.helpers import _is_planning_ct_path, _load_hu_tensor
+from src.pipeline.helpers.helpers_structures import (
+    WarpedStructureMaskCache,
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
     _get_structure_label_transform,
-    _is_planning_ct_path,
     _label_to_binary_mask,
-    _load_hu_tensor,
     _load_structure_label_map,
+    _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
     _surface_distances,
@@ -108,13 +109,11 @@ def hausdorff_and_hd95(
         If the masks have different shapes.
     """
 
-    # Surface extraction and nearest-neighbor distance search happen once
     distances = _surface_distances(pred, ref, spacing)
 
     if isinstance(distances, float):
         return distances, distances
 
-    # Read HD and HD95 from the shared distance tensor
     return float(distances.max().item()), float(torch.quantile(distances, 0.95).item())
 
 
@@ -122,7 +121,8 @@ def calculate_structure_similarity_metrics(
     generated: dict[str, list[Path]],
     originals: dict[str, list[Path]],
     config: MaisiTestingConfig,
-) -> None:
+    warped_mask_cache: WarpedStructureMaskCache | None = None,
+) -> WarpedStructureMaskCache:
     """
     Calculate generated-vs-real structure metrics.
 
@@ -142,6 +142,9 @@ def calculate_structure_similarity_metrics(
         Per-comparison, per-label structure metrics.
     - generated_vs_real_structure_summary.csv
         Patient- and label-level summary statistics.
+    - warped structure mask cache files
+        CPU `.pt` files under `config.warped_structure_cache_dir`, keyed by
+        generated CT, for reuse by dose metrics in later independent runs.
 
     Parameters
     ----------
@@ -157,6 +160,18 @@ def calculate_structure_similarity_metrics(
         Pipeline configuration containing structure labels, spacing,
         registration settings, and output paths.
 
+    warped_mask_cache : WarpedStructureMaskCache | None, optional
+        Optional CPU cache filled with planning masks warped into each
+        generated CT space. Passing this cache lets downstream dose metrics
+        reuse the same generated-space target/OAR masks without repeating DVF
+        registration or mask resampling.
+
+    Returns
+    -------
+    warped_mask_cache : WarpedStructureMaskCache
+        CPU cache of warped generated-space masks keyed by generated CT path.
+        Empty when no valid registrations are produced.
+
     Raises
     ------
     RuntimeError
@@ -164,9 +179,8 @@ def calculate_structure_similarity_metrics(
         but CUDA is not available.
     """
 
-    if not config.use_structure_metrics:
-        logger.info("Skipping structure metrics: disabled by configuration")
-        return
+    if warped_mask_cache is None:
+        warped_mask_cache = {}
 
     logger.info(
         "Calculating structure metrics: "
@@ -270,30 +284,36 @@ def calculate_structure_similarity_metrics(
             transform = result.transform
 
             with torch.inference_mode():
+                generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
                 for label in config.structure_labels:
                     # Warp one planning label at a time.
                     # Only the current predicted/reference masks are moved to metric_device,
                     # so CUDA sees small boolean masks rather than full CT caches.
-                    pred_mask = _warp_planning_mask_to_generated_ct(
-                        planning_mask=current_planning_masks[label],
-                        generated_ct=gen_ct,
-                        transform=transform,
-                        config=config,
-                    ).to(metric_device)
+                    pred_mask_cpu = generated_masks.get(label)
+                    if pred_mask_cpu is None:
+                        pred_mask_cpu = _warp_planning_mask_to_generated_ct(
+                            planning_mask=current_planning_masks[label],
+                            generated_ct=gen_ct,
+                            transform=transform,
+                            config=config,
+                        )
+                        generated_masks[label] = pred_mask_cpu
+
+                    pred_mask = pred_mask_cpu.to(metric_device)
 
                     for ref_path, ref_label_map in current_ref_label_maps.items():
                         ref_structure_path = _structure_path_for_ct(ref_path, config)
                         ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
-                        if pred_mask.shape != ref_mask.shape:
+                        try:
+                            dice = dice_coefficient(pred_mask, ref_mask)
+                            hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
+                        except ValueError as exc:
                             warnings.append(
-                                "Skipping structure shape mismatch for "
-                                f"{current_patient_id}, label {label}: "
-                                f"{tuple(pred_mask.shape)} vs {tuple(ref_mask.shape)}"
+                                f"Skipping invalid structure masks for {current_patient_id}, label {label}: {exc}"
                             )
                             del ref_mask
                             continue
 
-                        hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
                         rows.append(
                             {
                                 "patient_id": current_patient_id,
@@ -303,11 +323,13 @@ def calculate_structure_similarity_metrics(
                                 "planning_structure_path": str(current_planning_structure_path),
                                 "reference_structure_path": str(ref_structure_path),
                                 "structure_label": label,
-                                "dice": dice_coefficient(pred_mask, ref_mask),
+                                "dice": dice,
                                 "hd": hd,
                                 "hd95": hd95_value,
                             }
                         )
+
+                _save_warped_structure_masks(config, result.gen_path, generated_masks)
 
         if metric_device.type == "cuda" and len(gen_paths) > 1:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
@@ -362,7 +384,7 @@ def calculate_structure_similarity_metrics(
 
     if len(rows) == 0:
         logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
-        return
+        return warped_mask_cache
 
     df = pd.DataFrame(rows)
     metrics_path = config.metrics_dir / "generated_vs_real_structure_metrics.csv"
@@ -375,3 +397,5 @@ def calculate_structure_similarity_metrics(
     summary_path = config.metrics_dir / "generated_vs_real_structure_summary.csv"
     summary.to_csv(summary_path)
     logger.info("Saved structure metric summary: %s", summary_path)
+
+    return warped_mask_cache

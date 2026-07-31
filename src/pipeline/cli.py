@@ -4,11 +4,11 @@ from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
-from src.pipeline.evaluation.metrics import evaluate_generated_cts
+from src.pipeline.evaluation.metrics import evaluate_doses, evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
 
-PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "all"]
+PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +37,18 @@ def parse_args() -> argparse.Namespace:
         - validation_fold
         - no_validate_paths
         - no_lpips
+        - no_dose_metrics
+        - no_dose_structure_warping
+        - scenario_robustness
+        - original_anatomy_comparison
+        - no_base_dose_smoke_test
+        - dose_dvh_bin_width
+        - dose_dx_volume_percents
+        - dose_vx_thresholds
         - generated_ct_dir
+        - predicted_dose_dir
+        - dose_root
+        - warped_structure_cache_dir
         - processed_ct_dir
         - metrics_dir
     """
@@ -46,8 +57,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "stage",
-        choices=["prepare", "encode", "generate", "evaluate", "all"],
-        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', or 'all'"),
+        choices=["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"],
+        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', 'dose-evaluate', or 'all'"),
     )
 
     parser.add_argument(
@@ -97,6 +108,36 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--no-dose-metrics",
+        action="store_true",
+        help="Disable predicted-vs-reference dose metric calculation during evaluation",
+    )
+
+    parser.add_argument(
+        "--no-dose-structure-warping",
+        action="store_true",
+        help="Disable DVF-based planning structure warping for generated-dose structure metrics",
+    )
+
+    parser.add_argument(
+        "--scenario-robustness",
+        action="store_true",
+        help="Enable evaluation of candidate doses across generated-anatomy scenarios",
+    )
+
+    parser.add_argument(
+        "--original-anatomy-comparison",
+        action="store_true",
+        help="Enable robust-vs-clinical dose comparison on fraction-1 structures",
+    )
+
+    parser.add_argument(
+        "--no-base-dose-smoke-test",
+        action="store_true",
+        help="Disable the fraction-1 base-dose smoke test",
+    )
+
+    parser.add_argument(
         "--structure-labels",
         type=int,
         nargs="+",
@@ -109,6 +150,50 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional override for generated CT directory",
+    )
+
+    parser.add_argument(
+        "--predicted-dose-dir",
+        type=Path,
+        default=None,
+        help="Optional override for predicted dose directory",
+    )
+
+    parser.add_argument(
+        "--dose-root",
+        type=Path,
+        default=None,
+        help="Optional override for reference/ground-truth dose root",
+    )
+
+    parser.add_argument(
+        "--warped-structure-cache-dir",
+        type=Path,
+        default=None,
+        help="Optional override for persisted warped structure mask cache directory",
+    )
+
+    parser.add_argument(
+        "--dose-dvh-bin-width",
+        type=float,
+        default=None,
+        help="Dose bin width in Gy for cumulative DVH output",
+    )
+
+    parser.add_argument(
+        "--dose-dx-volume-percents",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Volume percentages for Dx metrics, for example 2 50 95 98",
+    )
+
+    parser.add_argument(
+        "--dose-vx-thresholds",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Dose thresholds in Gy for Vx metrics, for example 5 10 20 30",
     )
 
     parser.add_argument(
@@ -167,6 +252,11 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "validation_fold": args.validation_fold,
         "use_lpips": not args.no_lpips,
         "use_structure_metrics": not args.no_structure_metrics,
+        "use_dose_metrics": not args.no_dose_metrics,
+        "use_dose_structure_warping": not args.no_dose_structure_warping,
+        "use_base_dose_smoke_test": not args.no_base_dose_smoke_test,
+        "use_scenario_robustness": args.scenario_robustness,
+        "use_original_anatomy_comparison": args.original_anatomy_comparison,
     }
 
     if args.structure_labels is not None:
@@ -174,6 +264,24 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     if args.generated_ct_dir is not None:
         config_kwargs["generated_ct_dir"] = args.generated_ct_dir
+
+    if args.predicted_dose_dir is not None:
+        config_kwargs["predicted_dose_dir"] = args.predicted_dose_dir
+
+    if args.dose_root is not None:
+        config_kwargs["dose_root"] = args.dose_root
+
+    if args.warped_structure_cache_dir is not None:
+        config_kwargs["warped_structure_cache_dir"] = args.warped_structure_cache_dir
+
+    if args.dose_dvh_bin_width is not None:
+        config_kwargs["dose_dvh_bin_width"] = args.dose_dvh_bin_width
+
+    if args.dose_dx_volume_percents is not None:
+        config_kwargs["dose_dx_volume_percents"] = args.dose_dx_volume_percents
+
+    if args.dose_vx_thresholds is not None:
+        config_kwargs["dose_vx_thresholds"] = args.dose_vx_thresholds
 
     if args.processed_ct_dir is not None:
         config_kwargs["processed_ct_dir"] = args.processed_ct_dir
@@ -206,7 +314,8 @@ def run_stage(
     - encode: encode processed planning CTs into latent space
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
-    - all: run prepare, encode, generate, and evaluate in sequence
+    - dose-evaluate: calculate dose metrics
+    - all: run prepare, encode, generate, evaluate, and dose-evaluate in sequence
 
     Parameters
     ----------
@@ -234,11 +343,15 @@ def run_stage(
     elif stage == "evaluate":
         evaluate_generated_cts(config)
 
+    elif stage == "dose-evaluate":
+        evaluate_doses(config)
+
     elif stage == "all":
         prepare_test_data(config)
         encode_latents(config)
         generate_ct_variants(config)
         evaluate_generated_cts(config)
+        evaluate_doses(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")
