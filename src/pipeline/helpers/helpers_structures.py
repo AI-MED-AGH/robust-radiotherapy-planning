@@ -503,7 +503,7 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     arr = tensor.detach().cpu().numpy()
     arr = np.transpose(arr, (2, 0, 1))
     image = sitk.GetImageFromArray(arr.astype(np.float32 if pixel_id == sitk.sitkFloat32 else np.uint8))
-    image.SetSpacing((config.spacing[2], config.spacing[1], config.spacing[0]))  # type: ignore[no-untyped-call]
+    image.SetSpacing(config.spacing)  # type: ignore[no-untyped-call]
     image.SetOrigin((0.0, 0.0, 0.0))  # type: ignore[no-untyped-call]
     image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))  # type: ignore[no-untyped-call]
     return image
