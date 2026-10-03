@@ -419,6 +419,19 @@ class MaisiTestingConfig:
         ------
         FileNotFoundError
             If inputs or checkpoints required by the selected stage are missing.
+
+        ValueError
+            If ``stage`` is not a supported pipeline stage.
+
+        Notes
+        -----
+        Preparation requires raw CT directories. Encoding requires the VAE
+        checkpoint; generation requires both VAE and rectified-flow checkpoints.
+        Evaluation requires structure and clinical dose directories only when
+        their corresponding workflows are enabled. ``all`` combines these
+        requirements. Preparation creates its split from CT paths, so an
+        existing split JSON or default weights directory is not required.
+        Individual stage functions validate their processed input files.
         """
 
         if self.stage not in {"prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"}:

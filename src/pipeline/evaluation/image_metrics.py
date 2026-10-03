@@ -416,9 +416,9 @@ def calculate_similarity_metrics(
     """
     Calculate generated-vs-real CT similarity metrics.
 
-    This function compares generated CT variants with available non-planning
-    original/reference CT tensors for the same patient. It is robust to missing
-    generated variants and calculates only comparisons that are possible.
+    Compare each generated CT with every non-planning reference CT belonging
+    to the same patient. Skip patients without follow-up references and pairs
+    with different tensor shapes, logging the reasons.
 
     Metrics:
     - MAE: lower is better
@@ -449,10 +449,22 @@ def calculate_similarity_metrics(
         Optional initialized LPIPS model. If ``None``, LPIPS values are left as
         NaN even when ``config.use_lpips`` is enabled.
 
-    Raises
-    ------
-    ValueError
-        If no valid generated-vs-real comparisons can be calculated.
+    Returns
+    -------
+    None
+        Write comparison and patient-summary CSVs into ``config.metrics_dir``
+        when at least one valid pair is available.
+
+    Notes
+    -----
+    If no valid comparisons are available, log a warning and return without
+    writing either CSV. This permits independent variety and dose workflows
+    to continue. Invalid tensor contents and metric execution failures still
+    propagate; they are not treated as missing comparisons.
+
+    This function does not delete existing CSVs or publish staged outputs.
+    ``evaluate_generated_cts`` manages those operations and removes stale
+    similarity CSVs only after the overall evaluation completes successfully.
     """
 
     device = torch.device(config.device)
@@ -521,10 +533,11 @@ def calculate_similarity_metrics(
         logger.warning(message)
 
     if len(rows) == 0:
-        raise ValueError(
-            "No valid generated-vs-real comparisons were calculated. "
-            "Check whether patient IDs match and tensor shapes are compatible"
+        logger.warning(
+            "Skipping generated-vs-real image metrics: no valid comparisons. "
+            "Check follow-up CT availability, patient IDs, and tensor shapes"
         )
+        return
 
     df = pd.DataFrame(rows)
     metrics_path = config.metrics_dir / "generated_vs_real_metrics.csv"
