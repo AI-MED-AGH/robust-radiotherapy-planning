@@ -220,6 +220,10 @@ class MaisiTestingConfig:
     validate_paths : bool
         Whether filesystem paths should be validated during initialization.
 
+    stage : str
+        Stage whose inputs are validated. Defaults to evaluation for notebook
+        callers; the CLI supplies its selected stage explicitly.
+
     Raises
     ------
     FileNotFoundError
@@ -326,6 +330,7 @@ class MaisiTestingConfig:
 
     # Validation settings
     validate_paths: bool = True
+    stage: Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"] = "evaluate"
 
     def __post_init__(self) -> None:
         """
@@ -408,37 +413,37 @@ class MaisiTestingConfig:
 
     def _validate_paths(self) -> None:
         """
-        Validate required input data paths and model weight paths.
+        Validate only inputs consumed by the configured stage.
 
         Raises
         ------
         FileNotFoundError
-            If CT data, data split JSON, weights directory, VAE weights,
-            or rectified flow weights do not exist.
+            If inputs or checkpoints required by the selected stage are missing.
         """
 
-        if not self.data_root.exists():
+        if self.stage not in {"prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"}:
+            raise ValueError(f"Unsupported pipeline stage: {self.stage}")
+
+        if self.stage in {"prepare", "all"} and not self.data_root.exists():
             raise FileNotFoundError(f"Data root does not exist: {self.data_root}")
 
-        if not self.ct_root.exists():
+        if self.stage in {"prepare", "all"} and not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
-        if (self.use_structure_metrics or self.use_dose_metrics) and not self.structures_root.exists():
+        needs_evaluation = self.stage in {"evaluate", "dose-evaluate", "all"}
+        needs_structures = self.use_dose_metrics or (self.stage != "dose-evaluate" and self.use_structure_metrics)
+        if needs_evaluation and needs_structures and not self.structures_root.exists():
             raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
 
-        if self.use_dose_metrics and not self.dose_root.exists():
+        if needs_evaluation and self.use_dose_metrics and not self.dose_root.exists():
             raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
 
-        if not self.data_dict_path.exists():
-            raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
-
-        if not self.weights_dir.exists():
-            raise FileNotFoundError(f"Weights directory does not exist: {self.weights_dir}")
-
-        if not self.vae_weight_path.exists():
+        # Preparation builds the split from raw CTs; it does not read the JSON.
+        # Check checkpoint files directly so custom paths need no default weights directory.
+        if self.stage in {"encode", "generate", "all"} and not self.vae_weight_path.is_file():
             raise FileNotFoundError(f"VAE weight file does not exist: {self.vae_weight_path}")
 
-        if not self.rflow_weight_path.exists():
+        if self.stage in {"generate", "all"} and not self.rflow_weight_path.is_file():
             raise FileNotFoundError(f"Rectified flow weight file does not exist: {self.rflow_weight_path}")
 
     def _validate_inference_settings(self) -> None:

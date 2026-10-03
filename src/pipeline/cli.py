@@ -245,6 +245,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     """
 
     config_kwargs = {
+        "stage": args.stage,
         "validate_paths": not args.no_validate_paths,
         "cts_per_patient": args.cts_per_patient,
         "steps": args.steps,
@@ -304,10 +305,9 @@ def run_stage(
     """
     Run one selected MAISI testing pipeline stage.
 
-    Each stage entry point clears only the output directory it owns before
-    saving new results. This keeps single-stage runs usable: inputs produced by
-    earlier stages are preserved, while stale outputs for the selected stage are
-    removed by the function that writes them.
+    Preparation and inference replace their own outputs. Evaluation stages
+    stage CSV files before publishing them, preserving previous results if
+    metric calculation fails.
 
     Supported stages:
     - prepare: preprocess test CTs
@@ -315,7 +315,7 @@ def run_stage(
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
     - dose-evaluate: calculate dose metrics
-    - all: run prepare, encode, generate, evaluate, and dose-evaluate in sequence
+    - all: run prepare, encode, generate, then evaluate (including doses)
 
     Parameters
     ----------
@@ -351,7 +351,6 @@ def run_stage(
         encode_latents(config)
         generate_ct_variants(config)
         evaluate_generated_cts(config)
-        evaluate_doses(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")
