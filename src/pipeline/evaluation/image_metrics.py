@@ -462,9 +462,6 @@ def calculate_similarity_metrics(
     to continue. Invalid tensor contents and metric execution failures still
     propagate; they are not treated as missing comparisons.
 
-    This function does not delete existing CSVs or publish staged outputs.
-    ``evaluate_generated_cts`` manages those operations and removes stale
-    similarity CSVs only after the overall evaluation completes successfully.
     """
 
     device = torch.device(config.device)
