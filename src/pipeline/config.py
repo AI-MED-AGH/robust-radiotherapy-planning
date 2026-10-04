@@ -257,12 +257,12 @@ class MaisiTestingConfig:
     evaluation_split: Literal["test", "val"] = "test"
     validation_fold: int = 0
 
-    processed_ct_dir: Path = output_root / "processed_ct" / "test"
-    latent_ct_dir: Path = output_root / "latents" / "test"
-    generated_ct_dir: Path = output_root / "generated_ct" / "test"
-    predicted_dose_dir: Path = output_root / "predicted_dose" / "test"
-    warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / "test"
-    metrics_dir: Path = output_root / "metrics" / "test"
+    processed_ct_dir: Path = output_root / "processed_ct" / evaluation_split
+    latent_ct_dir: Path = output_root / "latents" / evaluation_split
+    generated_ct_dir: Path = output_root / "generated_ct" / evaluation_split
+    predicted_dose_dir: Path = output_root / "predicted_dose" / evaluation_split
+    warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / evaluation_split
+    metrics_dir: Path = output_root / "metrics" / evaluation_split
     logs_dir: Path = output_root / "logs"
 
     # Model weights
@@ -361,43 +361,29 @@ class MaisiTestingConfig:
         self._set_default_scheduler_config()
         self._set_split_output_dirs()
 
-        self._create_output_dirs()
+        self._validate_inference_settings()
         if self.validate_paths:
             self._validate_paths()
-        self._validate_inference_settings()
+            self.validate_intermediate_inputs(self.stage)
+        self._create_output_dirs()
 
     def _set_split_output_dirs(self) -> None:
         """
         Point default output directories at the configured evaluation split.
         """
 
-        if self.evaluation_split == "test":
-            return
-
-        default_processed_ct_dir = self.output_root / "processed_ct" / "test"
-        default_latent_ct_dir = self.output_root / "latents" / "test"
-        default_generated_ct_dir = self.output_root / "generated_ct" / "test"
-        default_predicted_dose_dir = self.output_root / "predicted_dose" / "test"
-        default_warped_structure_cache_dir = self.output_root / "warped_structure_masks" / "test"
-        default_metrics_dir = self.output_root / "metrics" / "test"
-
-        if self.processed_ct_dir == default_processed_ct_dir:
-            self.processed_ct_dir = self.output_root / "processed_ct" / self.evaluation_split
-
-        if self.latent_ct_dir == default_latent_ct_dir:
-            self.latent_ct_dir = self.output_root / "latents" / self.evaluation_split
-
-        if self.generated_ct_dir == default_generated_ct_dir:
-            self.generated_ct_dir = self.output_root / "generated_ct" / self.evaluation_split
-
-        if self.predicted_dose_dir == default_predicted_dose_dir:
-            self.predicted_dose_dir = self.output_root / "predicted_dose" / self.evaluation_split
-
-        if self.warped_structure_cache_dir == default_warped_structure_cache_dir:
-            self.warped_structure_cache_dir = self.output_root / "warped_structure_masks" / self.evaluation_split
-
-        if self.metrics_dir == default_metrics_dir:
-            self.metrics_dir = self.output_root / "metrics" / self.evaluation_split
+        split_directories = {
+            "processed_ct_dir": "processed_ct",
+            "latent_ct_dir": "latents",
+            "generated_ct_dir": "generated_ct",
+            "predicted_dose_dir": "predicted_dose",
+            "warped_structure_cache_dir": "warped_structure_masks",
+            "metrics_dir": "metrics",
+        }
+        for attribute, directory in split_directories.items():
+            default_path = self.__dataclass_fields__[attribute].default
+            if getattr(self, attribute) == default_path:
+                setattr(self, attribute, self.output_root / directory / self.evaluation_split)
 
     def _create_output_dirs(self) -> None:
         """
@@ -433,7 +419,7 @@ class MaisiTestingConfig:
         their corresponding workflows are enabled. ``all`` combines these
         requirements. Preparation creates its split from CT paths, so an
         existing split JSON or default weights directory is not required.
-        Individual stage functions validate their processed input files.
+        Intermediate files are checked separately before outputs are created.
         """
 
         if self.stage not in PIPELINE_STAGES:
@@ -460,6 +446,38 @@ class MaisiTestingConfig:
 
         if self.stage in {"generate", "all"} and not self.rflow_weight_path.is_file():
             raise FileNotFoundError(f"Rectified flow weight file does not exist: {self.rflow_weight_path}")
+
+    def validate_intermediate_inputs(self, stage: PipelineStage) -> None:
+        """Check existing inputs for a standalone stage before clearing outputs.
+
+        Preparation and ``all`` produce their intermediate inputs during the
+        run. Evaluation permits an empty reference CT directory. Dose-only
+        workflows retain their optional prediction and clinical fallback rules.
+
+        Raises
+        ------
+        FileNotFoundError
+            If a required intermediate directory does not exist.
+        ValueError
+            If no required intermediate tensor files are present.
+        """
+        requirements = {
+            "encode": (self.processed_ct_dir, "*fraction_1_*.pt", "prepare"),
+            "generate": (self.latent_ct_dir, "*.pt", "encode"),
+            "evaluate": (self.generated_ct_dir, "**/*.pt", "generate"),
+        }
+        if stage in requirements:
+            directory, pattern, prerequisite = requirements[stage]
+            if not directory.is_dir():
+                raise FileNotFoundError(
+                    f"Intermediate input directory does not exist: {directory}. Run '{prerequisite}' first"
+                )
+            if not any(path.is_file() for path in directory.glob(pattern)):
+                raise ValueError(
+                    f"No required intermediate CT tensors found in: {directory}. Run '{prerequisite}' first"
+                )
+        if stage == "evaluate" and not self.processed_ct_dir.is_dir():
+            raise FileNotFoundError(f"Reference CT directory does not exist: {self.processed_ct_dir}")
 
     def _validate_inference_settings(self) -> None:
         """

@@ -280,6 +280,8 @@ def evaluate_generated_cts(
     collection and metric functions propagate to the caller.
     """
 
+    config.validate_intermediate_inputs("evaluate")
+
     clear_directory_contents(config.metrics_dir)
 
     # Collect once and pass the same grouping to all image/structure stages so
