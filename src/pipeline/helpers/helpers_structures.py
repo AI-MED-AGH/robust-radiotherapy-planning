@@ -477,11 +477,11 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     """
     Convert a pipeline tensor to a SimpleITK image.
 
-    Pipeline tensors use shape ``[H, W, D]``. SimpleITK images are created from
-    arrays ordered as ``[D, H, W]``, so the tensor axes are transposed before
-    conversion. SimpleITK x/y/z then correspond to tensor W/H/D, so spacing
-    must follow that same permutation. The configured spacing must describe
-    the actual input voxels; assigning spacing does not resample voxel data.
+    Pipeline tensors use shape ``[H, W, D]``. Transposing with ``(2, 1, 0)``
+    produces an array ordered as ``[D, W, H]``. SimpleITK interprets array
+    axes as z/y/x, so image x/y/z correspond to tensor H/W/D. Spacing is
+    assigned unchanged and must describe voxel spacing along those axes.
+    Assigning spacing does not resample voxel data.
 
     Parameters
     ----------
@@ -512,10 +512,12 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
 def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     """
-    Convert a SimpleITK image back to a pipeline tensor.
+    Convert a SimpleITK image to a tensor with the depth axis last.
 
-    SimpleITK array extraction returns data ordered as ``[D, H, W]``. The array
-    is transposed back to the pipeline convention ``[H, W, D]``.
+    SimpleITK array extraction returns axes in z/y/x order. Transposing with
+    ``(1, 2, 0)`` produces y/x/z order. For images created by
+    ``_tensor_to_sitk_image``, this yields ``[W, H, D]`` and swaps the first
+    two axes relative to the original pipeline tensor.
 
     Parameters
     ----------
@@ -525,7 +527,8 @@ def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     Returns
     -------
     tensor : torch.Tensor
-        Tensor with shape ``[H, W, D]``.
+        Tensor with axes in image y/x/z order, or shape ``[W, H, D]`` for an
+        image created by ``_tensor_to_sitk_image``.
     """
 
     arr = sitk.GetArrayFromImage(image)
