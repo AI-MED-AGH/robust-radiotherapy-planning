@@ -1,14 +1,12 @@
 import argparse
 from pathlib import Path
-from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
 from src.pipeline.evaluation.metrics import evaluate_doses, evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
-
-PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"]
+from src.pipeline.stages import PIPELINE_STAGES, PipelineStage
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,8 +55,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "stage",
-        choices=["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"],
-        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', 'dose-evaluate', or 'all'"),
+        choices=PIPELINE_STAGES,
+        help=f"Pipeline stage to run: {', '.join(PIPELINE_STAGES)}",
     )
 
     parser.add_argument(

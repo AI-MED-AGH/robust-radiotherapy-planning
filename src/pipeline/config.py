@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 import torch
 
+from src.pipeline.stages import PIPELINE_STAGES, PipelineStage
+
 
 @dataclass
 class MaisiTestingConfig:
@@ -330,7 +332,7 @@ class MaisiTestingConfig:
 
     # Validation settings
     validate_paths: bool = True
-    stage: Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"] = "evaluate"
+    stage: PipelineStage = "evaluate"
 
     def __post_init__(self) -> None:
         """
@@ -434,7 +436,7 @@ class MaisiTestingConfig:
         Individual stage functions validate their processed input files.
         """
 
-        if self.stage not in {"prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"}:
+        if self.stage not in PIPELINE_STAGES:
             raise ValueError(f"Unsupported pipeline stage: {self.stage}")
 
         if self.stage in {"prepare", "all"} and not self.data_root.exists():
