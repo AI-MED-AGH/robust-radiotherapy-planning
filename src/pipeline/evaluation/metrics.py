@@ -253,6 +253,24 @@ def evaluate_generated_cts(
     config : MaisiTestingConfig
         Configuration object containing evaluation settings.
 
+    Raises
+    ------
+    FileNotFoundError
+        If generated or reference CT directories do not exist, or required
+        tensor, structure, or dose files are missing.
+
+    ValueError
+        If no generated CT tensors are found, tensor contents are invalid,
+        or inputs to an enabled metric workflow are invalid.
+
+    RuntimeError
+        If an enabled metric workflow requires unavailable CUDA, or tensor
+        loading, model execution, or registration fails.
+
+    OSError
+        If the metrics directory cannot be cleared, input files cannot be
+        read, or metric outputs cannot be written.
+
     Notes
     -----
     The reference CT directory may be empty. Image and structure similarity

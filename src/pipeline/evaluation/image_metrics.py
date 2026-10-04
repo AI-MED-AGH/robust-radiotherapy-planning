@@ -449,14 +449,10 @@ def calculate_similarity_metrics(
         Optional initialized LPIPS model. If ``None``, LPIPS values are left as
         NaN even when ``config.use_lpips`` is enabled.
 
-    Returns
-    -------
-    None
-        Write comparison and patient-summary CSVs into ``config.metrics_dir``
-        when at least one valid pair is available.
-
     Notes
     -----
+    Write comparison and patient-summary CSVs into ``config.metrics_dir``
+    when at least one valid pair is available.
     If no valid comparisons are available, log a warning and return without
     writing either CSV. This permits independent variety and dose workflows
     to continue. Invalid tensor contents and metric execution failures still
