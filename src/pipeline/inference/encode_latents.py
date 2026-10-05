@@ -208,6 +208,8 @@ def encode_latents(config: MaisiTestingConfig) -> None:
 
     device = torch.device(config.device)
 
+    config.validate_intermediate_inputs("encode")
+
     clear_directory_contents(config.latent_ct_dir)
 
     vae_model = load_vae_model(

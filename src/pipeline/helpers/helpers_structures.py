@@ -477,10 +477,11 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     """
     Convert a pipeline tensor to a SimpleITK image.
 
-    Pipeline tensors use shape ``[H, W, D]``. SimpleITK images are created from
-    arrays ordered as ``[D, H, W]``, so the tensor axes are transposed before
-    conversion. Spacing is also reversed to match the SimpleITK x/y/z axis
-    convention.
+    Pipeline tensors use shape ``[H, W, D]``. Transposing with ``(2, 1, 0)``
+    produces an array ordered as ``[D, W, H]``. SimpleITK interprets array
+    axes as z/y/x, so image x/y/z correspond to tensor H/W/D. Spacing is
+    assigned unchanged and must describe voxel spacing along those axes.
+    Assigning spacing does not resample voxel data.
 
     Parameters
     ----------
@@ -501,9 +502,9 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
     """
 
     arr = tensor.detach().cpu().numpy()
-    arr = np.transpose(arr, (2, 0, 1))
+    arr = np.transpose(arr, (2, 1, 0))
     image = sitk.GetImageFromArray(arr.astype(np.float32 if pixel_id == sitk.sitkFloat32 else np.uint8))
-    image.SetSpacing((config.spacing[2], config.spacing[1], config.spacing[0]))  # type: ignore[no-untyped-call]
+    image.SetSpacing(config.spacing)  # type: ignore[no-untyped-call]
     image.SetOrigin((0.0, 0.0, 0.0))  # type: ignore[no-untyped-call]
     image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))  # type: ignore[no-untyped-call]
     return image
@@ -511,10 +512,11 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
 def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     """
-    Convert a SimpleITK image back to a pipeline tensor.
+    Convert a SimpleITK image to a pipeline tensor with shape ``[H, W, D]``.
 
-    SimpleITK array extraction returns data ordered as ``[D, H, W]``. The array
-    is transposed back to the pipeline convention ``[H, W, D]``.
+    SimpleITK array extraction returns axes in z/y/x order. Transposing with
+    ``(2, 1, 0)`` produces x/y/z order, reversing the axis conversion in
+    ``_tensor_to_sitk_image`` and restoring the original pipeline tensor axes.
 
     Parameters
     ----------
@@ -524,11 +526,12 @@ def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     Returns
     -------
     tensor : torch.Tensor
-        Tensor with shape ``[H, W, D]``.
+        Tensor with axes in image x/y/z order, or shape ``[H, W, D]`` for an
+        image created by ``_tensor_to_sitk_image``.
     """
 
     arr = sitk.GetArrayFromImage(image)
-    arr = np.transpose(arr, (1, 2, 0))
+    arr = np.transpose(arr, (2, 1, 0))
     return torch.as_tensor(arr)
 
 

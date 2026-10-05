@@ -278,6 +278,8 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
     if "base_img_size_numel" not in config.scheduler_config:
         raise ValueError("`config.scheduler_config` must contain 'base_img_size_numel'")
 
+    config.validate_intermediate_inputs("generate")
+
     clear_directory_contents(config.generated_ct_dir)
     clear_directory_contents(config.warped_structure_cache_dir)
 

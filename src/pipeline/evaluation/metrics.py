@@ -87,7 +87,7 @@ def evaluate_doses(
         logger.info("Skipping original-anatomy dose comparison: disabled by configuration")
 
 
-def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
+def collect_original_cts(original_ct_dir: Path, *, allow_empty: bool = False) -> dict[str, list[Path]]:
     """
     Collect available original/reference CT tensors grouped by patient ID.
 
@@ -104,6 +104,11 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
     original_ct_dir : Path
         Directory containing original/reference CT tensors saved as `.pt`
         files.
+
+    allow_empty : bool, optional
+        If ``True``, an existing directory without CT tensors returns an
+        empty dictionary. Defaults to ``False``. A missing directory still
+        raises ``FileNotFoundError``.
 
     Returns
     -------
@@ -127,7 +132,7 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
         If `original_ct_dir` does not exist.
 
     ValueError
-        If no `.pt` files are found in `original_ct_dir`.
+        If no `.pt` files are found and ``allow_empty`` is ``False``.
     """
 
     if not original_ct_dir.exists():
@@ -140,7 +145,7 @@ def collect_original_cts(original_ct_dir: Path) -> dict[str, list[Path]]:
         )
     )
 
-    if len(paths) == 0:
+    if len(paths) == 0 and not allow_empty:
         raise ValueError(f"No original/reference CT `.pt` files found in: {original_ct_dir}")
 
     originals: dict[str, list[Path]] = {}
@@ -232,13 +237,9 @@ def evaluate_generated_cts(
     """
     Run full CT generation evaluation.
 
-    This function produces up to two metric files:
-
-    1. generated_vs_real_metrics.csv
-       Generated CTs compared to original/reference CTs.
-
-    2. generated_pairwise_variety_metrics.csv
-       Generated CT variants compared with each other.
+    Calculate generated-versus-real image similarity, optional structure
+    similarity, generated pairwise variety, and optional dose metrics, along
+    with their summary CSVs.
 
     The metrics output directory is cleared before new CSV files are written.
     Generated CTs and processed reference CTs are left untouched.
@@ -255,21 +256,38 @@ def evaluate_generated_cts(
     Raises
     ------
     FileNotFoundError
-        If generated or original CT directories do not exist.
+        If generated or reference CT directories do not exist, or required
+        tensor, structure, or dose files are missing.
 
     ValueError
-        If no valid generated-vs-real comparisons can be calculated.
+        If no generated CT tensors are found, tensor contents are invalid,
+        or inputs to an enabled metric workflow are invalid.
+
+    RuntimeError
+        If an enabled metric workflow requires unavailable CUDA, or tensor
+        loading, model execution, or registration fails.
 
     OSError
-        If the metrics output directory cannot be cleared.
+        If the metrics directory cannot be cleared, input files cannot be
+        read, or metric outputs cannot be written.
+
+    Notes
+    -----
+    The reference CT directory may be empty. Image and structure similarity
+    skip unavailable comparisons, while variety and dose evaluation continue
+    subject to their own input requirements. Generated CTs are still required,
+    and missing input directories remain errors. Exceptions from called
+    collection and metric functions propagate to the caller.
     """
+
+    config.validate_intermediate_inputs("evaluate")
 
     clear_directory_contents(config.metrics_dir)
 
     # Collect once and pass the same grouping to all image/structure stages so
     # they evaluate an identical snapshot of the available files
     generated = collect_generated_cts(config.generated_ct_dir)
-    originals = collect_original_cts(config.processed_ct_dir)
+    originals = collect_original_cts(config.processed_ct_dir, allow_empty=True)
     lpips_model = _build_lpips_model(config)
 
     logger.info(

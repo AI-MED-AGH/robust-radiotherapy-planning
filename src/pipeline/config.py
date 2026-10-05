@@ -1,11 +1,13 @@
 # NOTICE: This file utilizes configurations derived from: https://huggingface.co/nvidia/NV-Generate-CT
 # Licensed by NVIDIA Corporation under the NVIDIA Open Model License.
 
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 import torch
+
+from src.pipeline.stages import PIPELINE_STAGES, PipelineStage
 
 
 @dataclass
@@ -45,18 +47,11 @@ class MaisiTestingConfig:
     data_root : Path
         Root directory containing project data.
 
-    ct_root : Path
-        Directory containing patient CT folders.
-
-    structures_root : Path
-        Directory containing patient structure-label folders used for
-        structure-based evaluation metrics.
-
-    dose_root : Path
-        Directory containing ground-truth/reference dose distributions.
-
-    data_dict_path : Path
-        Path to the dataset split JSON file.
+    path_overrides : dict[str, Path] | None
+        Optional overrides for derived path attributes, keyed by attribute name
+        (for example, ``{"dose_root": Path("custom/doses")}``). Derived paths
+        are not direct constructor arguments. Overrides are applied before
+        input validation and output directory creation.
 
     output_root : Path
         Root directory for all pipeline outputs.
@@ -70,38 +65,8 @@ class MaisiTestingConfig:
         Validation fold index used when selecting validation patients from
         the dataset split JSON.
 
-    processed_ct_dir : Path
-        Directory containing preprocessed CT data.
-
-    latent_ct_dir : Path
-        Directory containing encoded latent representations.
-
-    generated_ct_dir : Path
-        Directory containing generated CT images.
-
-    metrics_dir : Path
-        Directory containing evaluation metrics.
-
-    predicted_dose_dir : Path
-        Directory containing model-predicted dose distributions to compare
-        against reference doses.
-
-    warped_structure_cache_dir : Path
-        Directory containing persisted planning structure masks warped into
-        generated CT space. This cache lets independent dose-only evaluation
-        reuse DVF work produced by structure metrics.
-
-    logs_dir : Path
-        Directory containing pipeline logs.
-
     weights_dir : Path
         Directory containing MAISI model weights.
-
-    vae_weight_path : Path
-        Path to the MAISI VAE checkpoint.
-
-    rflow_weight_path : Path
-        Path to the MAISI rectified flow checkpoint.
 
     cts_per_patient : int
         Number of synthetic CTs generated per patient.
@@ -220,13 +185,65 @@ class MaisiTestingConfig:
     validate_paths : bool
         Whether filesystem paths should be validated during initialization.
 
+    stage : str
+        Stage whose inputs are validated. Defaults to evaluation for notebook
+        callers; the CLI supplies its selected stage explicitly.
+
+    Attributes
+    ----------
+    The following paths are derived during initialization. Customize them with
+    ``path_overrides``; they are not direct constructor parameters.
+
+    ct_root : Path
+        Directory containing patient CT folders.
+
+    structures_root : Path
+        Directory containing patient structure-label folders used for
+        structure-based evaluation metrics.
+
+    dose_root : Path
+        Directory containing ground-truth/reference dose distributions.
+
+    data_dict_path : Path
+        Path to the dataset split JSON file.
+
+    processed_ct_dir : Path
+        Directory containing preprocessed CT data.
+
+    latent_ct_dir : Path
+        Directory containing encoded latent representations.
+
+    generated_ct_dir : Path
+        Directory containing generated CT images.
+
+    metrics_dir : Path
+        Directory containing evaluation metrics.
+
+    predicted_dose_dir : Path
+        Directory containing model-predicted dose distributions to compare
+        against reference doses.
+
+    warped_structure_cache_dir : Path
+        Directory containing persisted planning structure masks warped into
+        generated CT space. This cache lets independent dose-only evaluation
+        reuse DVF work produced by structure metrics.
+
+    logs_dir : Path
+        Directory containing pipeline logs.
+
+    vae_weight_path : Path
+        Path to the MAISI VAE checkpoint.
+
+    rflow_weight_path : Path
+        Path to the MAISI rectified flow checkpoint.
+
     Raises
     ------
     FileNotFoundError
         If required input data or model checkpoints are missing.
 
     ValueError
-        If inference parameters are invalid.
+        If inference parameters are invalid or a path override key is unknown.
 
     Notes
     -----
@@ -239,31 +256,32 @@ class MaisiTestingConfig:
     not load data or models.
     """
 
+    # Derived paths are assigned in __post_init__ before validation.
     # Data paths
     data_root: Path = Path("src/data_full")
-    ct_root: Path = data_root / "CT"
-    structures_root: Path = data_root / "STRUCTURES"
-    dose_root: Path = data_root / "DOSES"
-    data_dict_path: Path = data_root / "data_dict.json"
+    ct_root: Path = field(init=False)
+    structures_root: Path = field(init=False)
+    dose_root: Path = field(init=False)
+    data_dict_path: Path = field(init=False)
 
     # Output paths
     output_root: Path = Path("RESULTS/MAISI_TESTING")
     evaluation_split: Literal["test", "val"] = "test"
     validation_fold: int = 0
 
-    processed_ct_dir: Path = output_root / "processed_ct" / "test"
-    latent_ct_dir: Path = output_root / "latents" / "test"
-    generated_ct_dir: Path = output_root / "generated_ct" / "test"
-    predicted_dose_dir: Path = output_root / "predicted_dose" / "test"
-    warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / "test"
-    metrics_dir: Path = output_root / "metrics" / "test"
-    logs_dir: Path = output_root / "logs"
+    processed_ct_dir: Path = field(init=False)
+    latent_ct_dir: Path = field(init=False)
+    generated_ct_dir: Path = field(init=False)
+    predicted_dose_dir: Path = field(init=False)
+    warped_structure_cache_dir: Path = field(init=False)
+    metrics_dir: Path = field(init=False)
+    logs_dir: Path = field(init=False)
 
     # Model weights
     weights_dir: Path = Path("src/pipeline/weights")
 
-    vae_weight_path: Path = weights_dir / "autoencoder.pt"
-    rflow_weight_path: Path = weights_dir / "diff_unet.pt"
+    vae_weight_path: Path = field(init=False)
+    rflow_weight_path: Path = field(init=False)
 
     # Inference config
     cts_per_patient: int = 1
@@ -324,10 +342,14 @@ class MaisiTestingConfig:
     rflow_config: dict[str, Any] | None = None
     scheduler_config: dict[str, Any] | None = None
 
+    # Optional constructor inputs for overriding derived paths.
+    path_overrides: InitVar[dict[str, Path] | None] = None
+
     # Validation settings
     validate_paths: bool = True
+    stage: PipelineStage = "evaluate"
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, path_overrides: dict[str, Path] | None) -> None:
         """
         Initialize default model configurations, create output directories,
         and validate basic pipeline settings.
@@ -335,10 +357,11 @@ class MaisiTestingConfig:
         This method is called automatically by the dataclass immediately after
         object creation.
 
-        It performs three tasks:
-        - creates output directories if they do not exist
+        It performs four tasks in order:
+        - derives paths from instance roots and applies path overrides
         - fills missing model/scheduler configs with defaults
         - validates paths and inference parameters
+        - creates output directories if they do not exist
 
         Raises
         ------
@@ -346,55 +369,109 @@ class MaisiTestingConfig:
             If required input data paths or model weight files do not exist.
 
         ValueError
-            If inference settings are invalid.
+            If inference settings are invalid or a path override key is unknown.
         """
 
+        self._set_default_paths(path_overrides)
         self._set_default_vae_config()
         self._set_default_rflow_config()
         self._set_default_scheduler_config()
-        self._set_split_output_dirs()
 
-        self._create_output_dirs()
+        self._validate_inference_settings()
         if self.validate_paths:
             self._validate_paths()
-        self._validate_inference_settings()
+            self.validate_intermediate_inputs(self.stage)
+        self._create_output_dirs()
 
-    def _set_split_output_dirs(self) -> None:
+    def _set_default_paths(self, path_overrides: dict[str, Path] | None) -> None:
         """
-        Point default output directories at the configured evaluation split.
+        Assign derived path attributes from instance roots and explicit overrides.
+
+        Derives CT, structure, dose, and split JSON paths from ``data_root``;
+        checkpoint paths from ``weights_dir``; and output paths from
+        ``output_root``. Processed CT, latent, generated CT, predicted dose,
+        warped structure cache, and metrics directories also include
+        ``evaluation_split``. The logs directory is shared across splits.
+
+        Parameters
+        ----------
+        path_overrides : dict[str, Path] | None
+            Optional mapping from derived attribute names to replacement paths.
+            Supported keys are ``ct_root``, ``structures_root``, ``dose_root``,
+            ``data_dict_path``, ``processed_ct_dir``, ``latent_ct_dir``,
+            ``generated_ct_dir``, ``predicted_dose_dir``,
+            ``warped_structure_cache_dir``, ``metrics_dir``, ``logs_dir``,
+            ``vae_weight_path``, and ``rflow_weight_path``.
+            Values are assigned exactly as supplied, without adding a root
+            or evaluation split. None or an empty mapping uses all defaults.
+
+        Raises
+        ------
+        ValueError
+            If the mapping contains an unsupported attribute name. All keys
+            are checked before any derived path attributes are assigned.
+
+        Notes
+        -----
+        Called during initialization before input validation and output
+        directory creation. This method only assigns paths; it does not check
+        their existence or create directories. Each call recalculates all
+        derived paths, replacing their previous values. Changing a root or
+        split afterward does not automatically recalculate derived paths.
         """
 
-        if self.evaluation_split == "test":
-            return
+        default_paths = {
+            "ct_root": self.data_root / "CT",
+            "structures_root": self.data_root / "STRUCTURES",
+            "dose_root": self.data_root / "DOSES",
+            "data_dict_path": self.data_root / "data_dict.json",
+            "logs_dir": self.output_root / "logs",
+            "vae_weight_path": self.weights_dir / "autoencoder.pt",
+            "rflow_weight_path": self.weights_dir / "diff_unet.pt",
+        }
 
-        default_processed_ct_dir = self.output_root / "processed_ct" / "test"
-        default_latent_ct_dir = self.output_root / "latents" / "test"
-        default_generated_ct_dir = self.output_root / "generated_ct" / "test"
-        default_predicted_dose_dir = self.output_root / "predicted_dose" / "test"
-        default_warped_structure_cache_dir = self.output_root / "warped_structure_masks" / "test"
-        default_metrics_dir = self.output_root / "metrics" / "test"
+        split_directories = {
+            "processed_ct_dir": "processed_ct",
+            "latent_ct_dir": "latents",
+            "generated_ct_dir": "generated_ct",
+            "predicted_dose_dir": "predicted_dose",
+            "warped_structure_cache_dir": "warped_structure_masks",
+            "metrics_dir": "metrics",
+        }
+        for attribute, directory in split_directories.items():
+            default_paths[attribute] = self.output_root / directory / self.evaluation_split
 
-        if self.processed_ct_dir == default_processed_ct_dir:
-            self.processed_ct_dir = self.output_root / "processed_ct" / self.evaluation_split
+        if path_overrides is not None:
+            unknown_paths = path_overrides.keys() - default_paths.keys()
+            if unknown_paths:
+                raise ValueError(f"Unknown path overrides: {sorted(unknown_paths)}")
+            default_paths.update(path_overrides)
 
-        if self.latent_ct_dir == default_latent_ct_dir:
-            self.latent_ct_dir = self.output_root / "latents" / self.evaluation_split
-
-        if self.generated_ct_dir == default_generated_ct_dir:
-            self.generated_ct_dir = self.output_root / "generated_ct" / self.evaluation_split
-
-        if self.predicted_dose_dir == default_predicted_dose_dir:
-            self.predicted_dose_dir = self.output_root / "predicted_dose" / self.evaluation_split
-
-        if self.warped_structure_cache_dir == default_warped_structure_cache_dir:
-            self.warped_structure_cache_dir = self.output_root / "warped_structure_masks" / self.evaluation_split
-
-        if self.metrics_dir == default_metrics_dir:
-            self.metrics_dir = self.output_root / "metrics" / self.evaluation_split
+        for attribute, path in default_paths.items():
+            setattr(self, attribute, path)
 
     def _create_output_dirs(self) -> None:
         """
-        Create all output directories required by the testing pipeline.
+        Create the configured pipeline output directories and missing parents.
+
+        Creates ``output_root``, ``processed_ct_dir``, ``latent_ct_dir``,
+        ``generated_ct_dir``, ``predicted_dose_dir``,
+        ``warped_structure_cache_dir``, ``metrics_dir``, and ``logs_dir``.
+        Uses the resolved instance paths, including explicit path overrides.
+
+        Raises
+        ------
+        OSError
+            If a directory cannot be created, for example because permission
+            is denied or a file occupies a required directory path.
+
+        Notes
+        -----
+        Called during initialization after path resolution and validation.
+        All output directories are created regardless of the selected stage
+        or enabled metrics, including when ``validate_paths`` is false.
+        Existing directories and their contents are preserved. If creation
+        fails, directories already created by this call remain on disk.
         """
 
         self.output_root.mkdir(parents=True, exist_ok=True)
@@ -408,38 +485,83 @@ class MaisiTestingConfig:
 
     def _validate_paths(self) -> None:
         """
-        Validate required input data paths and model weight paths.
+        Validate only inputs consumed by the configured stage.
 
         Raises
         ------
         FileNotFoundError
-            If CT data, data split JSON, weights directory, VAE weights,
-            or rectified flow weights do not exist.
+            If inputs or checkpoints required by the selected stage are missing.
+
+        ValueError
+            If ``stage`` is not a supported pipeline stage.
+
+        Notes
+        -----
+        Preparation requires raw CT directories. Encoding requires the VAE
+        checkpoint; generation requires both VAE and rectified-flow checkpoints.
+        Evaluation requires structure and clinical dose directories only when
+        their corresponding workflows are enabled. ``all`` combines these
+        requirements. Preparation creates its split from CT paths, so an
+        existing split JSON or default weights directory is not required.
+        Intermediate files are checked separately before outputs are created.
         """
 
-        if not self.data_root.exists():
+        if self.stage not in PIPELINE_STAGES:
+            raise ValueError(f"Unsupported pipeline stage: {self.stage}")
+
+        if self.stage in {"prepare", "all"} and not self.data_root.exists():
             raise FileNotFoundError(f"Data root does not exist: {self.data_root}")
 
-        if not self.ct_root.exists():
+        if self.stage in {"prepare", "all"} and not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
-        if (self.use_structure_metrics or self.use_dose_metrics) and not self.structures_root.exists():
+        needs_evaluation = self.stage in {"evaluate", "dose-evaluate", "all"}
+        needs_structures = self.use_dose_metrics or (self.stage != "dose-evaluate" and self.use_structure_metrics)
+        if needs_evaluation and needs_structures and not self.structures_root.exists():
             raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
 
-        if self.use_dose_metrics and not self.dose_root.exists():
+        if needs_evaluation and self.use_dose_metrics and not self.dose_root.exists():
             raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
 
-        if not self.data_dict_path.exists():
-            raise FileNotFoundError(f"Data split JSON does not exist: {self.data_dict_path}")
-
-        if not self.weights_dir.exists():
-            raise FileNotFoundError(f"Weights directory does not exist: {self.weights_dir}")
-
-        if not self.vae_weight_path.exists():
+        # Preparation builds the split from raw CTs; it does not read the JSON.
+        # Check checkpoint files directly so custom paths need no default weights directory.
+        if self.stage in {"encode", "generate", "all"} and not self.vae_weight_path.is_file():
             raise FileNotFoundError(f"VAE weight file does not exist: {self.vae_weight_path}")
 
-        if not self.rflow_weight_path.exists():
+        if self.stage in {"generate", "all"} and not self.rflow_weight_path.is_file():
             raise FileNotFoundError(f"Rectified flow weight file does not exist: {self.rflow_weight_path}")
+
+    def validate_intermediate_inputs(self, stage: PipelineStage) -> None:
+        """Check existing inputs for a standalone stage before clearing outputs.
+
+        Preparation and ``all`` produce their intermediate inputs during the
+        run. Evaluation permits an empty reference CT directory. Dose-only
+        workflows retain their optional prediction and clinical fallback rules.
+
+        Raises
+        ------
+        FileNotFoundError
+            If a required intermediate directory does not exist.
+        ValueError
+            If no required intermediate tensor files are present.
+        """
+        requirements = {
+            "encode": (self.processed_ct_dir, "*fraction_1_*.pt", "prepare"),
+            "generate": (self.latent_ct_dir, "*.pt", "encode"),
+            "evaluate": (self.generated_ct_dir, "**/*.pt", "generate"),
+        }
+        if stage in requirements:
+            directory, pattern, prerequisite = requirements[stage]
+            if not directory.is_dir():
+                raise FileNotFoundError(
+                    f"Intermediate input directory does not exist: {directory}. Run '{prerequisite}' first"
+                )
+            if not any(path.is_file() for path in directory.glob(pattern)):
+                raise ValueError(
+                    f"No required intermediate CT tensors found in: {directory}. Run '{prerequisite}' first"
+                )
+        if stage == "evaluate" and not self.processed_ct_dir.is_dir():
+            raise FileNotFoundError(f"Reference CT directory does not exist: {self.processed_ct_dir}")
 
     def _validate_inference_settings(self) -> None:
         """

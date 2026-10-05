@@ -1,14 +1,12 @@
 import argparse
 from pathlib import Path
-from typing import Literal
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.prepare_test_data import prepare_test_data
 from src.pipeline.evaluation.metrics import evaluate_doses, evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
-
-PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"]
+from src.pipeline.stages import PIPELINE_STAGES, PipelineStage
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,8 +55,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "stage",
-        choices=["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"],
-        help=("Pipeline stage to run: 'prepare', 'encode', 'generate', 'evaluate', 'dose-evaluate', or 'all'"),
+        choices=PIPELINE_STAGES,
+        help=f"Pipeline stage to run: {', '.join(PIPELINE_STAGES)}",
     )
 
     parser.add_argument(
@@ -225,8 +223,9 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     Build a MAISI testing configuration from parsed CLI arguments.
 
     This function converts command-line arguments into a `MaisiTestingConfig`
-    object. It sets the main runtime options directly during initialization
-    and then applies optional path overrides.
+    object. Runtime options are passed directly to the constructor. Optional
+    path flags are collected in ``path_overrides`` and applied during config
+    initialization, before input validation and output directory creation.
 
     Parameters
     ----------
@@ -242,9 +241,14 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     ------
     AttributeError
         If required CLI arguments are missing from `args`.
+    FileNotFoundError
+        If inputs required by the selected stage are missing.
+    ValueError
+        If configuration settings or required intermediate inputs are invalid.
     """
 
     config_kwargs = {
+        "stage": args.stage,
         "validate_paths": not args.no_validate_paths,
         "cts_per_patient": args.cts_per_patient,
         "steps": args.steps,
@@ -262,18 +266,6 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     if args.structure_labels is not None:
         config_kwargs["structure_labels"] = args.structure_labels
 
-    if args.generated_ct_dir is not None:
-        config_kwargs["generated_ct_dir"] = args.generated_ct_dir
-
-    if args.predicted_dose_dir is not None:
-        config_kwargs["predicted_dose_dir"] = args.predicted_dose_dir
-
-    if args.dose_root is not None:
-        config_kwargs["dose_root"] = args.dose_root
-
-    if args.warped_structure_cache_dir is not None:
-        config_kwargs["warped_structure_cache_dir"] = args.warped_structure_cache_dir
-
     if args.dose_dvh_bin_width is not None:
         config_kwargs["dose_dvh_bin_width"] = args.dose_dvh_bin_width
 
@@ -283,16 +275,21 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     if args.dose_vx_thresholds is not None:
         config_kwargs["dose_vx_thresholds"] = args.dose_vx_thresholds
 
-    if args.processed_ct_dir is not None:
-        config_kwargs["processed_ct_dir"] = args.processed_ct_dir
+    path_overrides = {}
+    for attribute in (
+        "generated_ct_dir",
+        "predicted_dose_dir",
+        "dose_root",
+        "warped_structure_cache_dir",
+        "processed_ct_dir",
+        "metrics_dir",
+        "structures_root",
+    ):
+        path = getattr(args, attribute)
+        if path is not None:
+            path_overrides[attribute] = path
 
-    if args.metrics_dir is not None:
-        config_kwargs["metrics_dir"] = args.metrics_dir
-
-    if args.structures_root is not None:
-        config_kwargs["structures_root"] = args.structures_root
-
-    config = MaisiTestingConfig(**config_kwargs)
+    config = MaisiTestingConfig(path_overrides=path_overrides, **config_kwargs)
 
     return config
 
@@ -304,10 +301,9 @@ def run_stage(
     """
     Run one selected MAISI testing pipeline stage.
 
-    Each stage entry point clears only the output directory it owns before
-    saving new results. This keeps single-stage runs usable: inputs produced by
-    earlier stages are preserved, while stale outputs for the selected stage are
-    removed by the function that writes them.
+    Preparation and inference replace their own outputs. Evaluation stages
+    stage CSV files before publishing them, preserving previous results if
+    metric calculation fails.
 
     Supported stages:
     - prepare: preprocess test CTs
@@ -315,7 +311,7 @@ def run_stage(
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
     - dose-evaluate: calculate dose metrics
-    - all: run prepare, encode, generate, evaluate, and dose-evaluate in sequence
+    - all: run prepare, encode, generate, then evaluate (including doses)
 
     Parameters
     ----------
@@ -351,7 +347,6 @@ def run_stage(
         encode_latents(config)
         generate_ct_variants(config)
         evaluate_generated_cts(config)
-        evaluate_doses(config)
 
     else:
         raise ValueError(f"Unsupported stage: {stage}")
