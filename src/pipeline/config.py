@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 
@@ -245,31 +245,33 @@ class MaisiTestingConfig:
     not load data or models.
     """
 
+    # Dependent paths use None until __post_init__ resolves them. Casts keep
+    # the public attributes typed as Path, as they are after initialization.
     # Data paths
     data_root: Path = Path("src/data_full")
-    ct_root: Path = data_root / "CT"
-    structures_root: Path = data_root / "STRUCTURES"
-    dose_root: Path = data_root / "DOSES"
-    data_dict_path: Path = data_root / "data_dict.json"
+    ct_root: Path = cast(Path, None)
+    structures_root: Path = cast(Path, None)
+    dose_root: Path = cast(Path, None)
+    data_dict_path: Path = cast(Path, None)
 
     # Output paths
     output_root: Path = Path("RESULTS/MAISI_TESTING")
     evaluation_split: Literal["test", "val"] = "test"
     validation_fold: int = 0
 
-    processed_ct_dir: Path = output_root / "processed_ct" / evaluation_split
-    latent_ct_dir: Path = output_root / "latents" / evaluation_split
-    generated_ct_dir: Path = output_root / "generated_ct" / evaluation_split
-    predicted_dose_dir: Path = output_root / "predicted_dose" / evaluation_split
-    warped_structure_cache_dir: Path = output_root / "warped_structure_masks" / evaluation_split
-    metrics_dir: Path = output_root / "metrics" / evaluation_split
-    logs_dir: Path = output_root / "logs"
+    processed_ct_dir: Path = cast(Path, None)
+    latent_ct_dir: Path = cast(Path, None)
+    generated_ct_dir: Path = cast(Path, None)
+    predicted_dose_dir: Path = cast(Path, None)
+    warped_structure_cache_dir: Path = cast(Path, None)
+    metrics_dir: Path = cast(Path, None)
+    logs_dir: Path = cast(Path, None)
 
     # Model weights
     weights_dir: Path = Path("src/pipeline/weights")
 
-    vae_weight_path: Path = weights_dir / "autoencoder.pt"
-    rflow_weight_path: Path = weights_dir / "diff_unet.pt"
+    vae_weight_path: Path = cast(Path, None)
+    rflow_weight_path: Path = cast(Path, None)
 
     # Inference config
     cts_per_patient: int = 1
@@ -356,10 +358,10 @@ class MaisiTestingConfig:
             If inference settings are invalid.
         """
 
+        self._set_default_paths()
         self._set_default_vae_config()
         self._set_default_rflow_config()
         self._set_default_scheduler_config()
-        self._set_split_output_dirs()
 
         self._validate_inference_settings()
         if self.validate_paths:
@@ -367,10 +369,18 @@ class MaisiTestingConfig:
             self.validate_intermediate_inputs(self.stage)
         self._create_output_dirs()
 
-    def _set_split_output_dirs(self) -> None:
-        """
-        Point default output directories at the configured evaluation split.
-        """
+    def _set_default_paths(self) -> None:
+        """Resolve omitted paths from instance roots, preserving explicit paths."""
+
+        default_paths = {
+            "ct_root": self.data_root / "CT",
+            "structures_root": self.data_root / "STRUCTURES",
+            "dose_root": self.data_root / "DOSES",
+            "data_dict_path": self.data_root / "data_dict.json",
+            "logs_dir": self.output_root / "logs",
+            "vae_weight_path": self.weights_dir / "autoencoder.pt",
+            "rflow_weight_path": self.weights_dir / "diff_unet.pt",
+        }
 
         split_directories = {
             "processed_ct_dir": "processed_ct",
@@ -381,9 +391,11 @@ class MaisiTestingConfig:
             "metrics_dir": "metrics",
         }
         for attribute, directory in split_directories.items():
-            default_path = self.__dataclass_fields__[attribute].default
-            if getattr(self, attribute) == default_path:
-                setattr(self, attribute, self.output_root / directory / self.evaluation_split)
+            default_paths[attribute] = self.output_root / directory / self.evaluation_split
+
+        for attribute, default_path in default_paths.items():
+            if getattr(self, attribute) is None:
+                setattr(self, attribute, default_path)
 
     def _create_output_dirs(self) -> None:
         """

@@ -512,12 +512,11 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
 def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     """
-    Convert a SimpleITK image to a tensor with the depth axis last.
+    Convert a SimpleITK image to a pipeline tensor with shape ``[H, W, D]``.
 
     SimpleITK array extraction returns axes in z/y/x order. Transposing with
-    ``(1, 2, 0)`` produces y/x/z order. For images created by
-    ``_tensor_to_sitk_image``, this yields ``[W, H, D]`` and swaps the first
-    two axes relative to the original pipeline tensor.
+    ``(2, 1, 0)`` produces x/y/z order, reversing the axis conversion in
+    ``_tensor_to_sitk_image`` and restoring the original pipeline tensor axes.
 
     Parameters
     ----------
@@ -527,12 +526,12 @@ def _sitk_image_to_tensor(image: sitk.Image) -> torch.Tensor:
     Returns
     -------
     tensor : torch.Tensor
-        Tensor with axes in image y/x/z order, or shape ``[W, H, D]`` for an
+        Tensor with axes in image x/y/z order, or shape ``[H, W, D]`` for an
         image created by ``_tensor_to_sitk_image``.
     """
 
     arr = sitk.GetArrayFromImage(image)
-    arr = np.transpose(arr, (1, 2, 0))
+    arr = np.transpose(arr, (2, 1, 0))
     return torch.as_tensor(arr)
 
 
