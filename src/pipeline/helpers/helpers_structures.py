@@ -271,6 +271,8 @@ def _nearest_distances(
         One nearest-target distance for each source point, shape ``[N]``.
     """
 
+    if batch_size <= 0:
+        raise ValueError("`batch_size` must be positive")
     chunks = []
     for start in range(0, source_points.shape[0], batch_size):
         chunk = source_points[start : start + batch_size]
@@ -312,6 +314,7 @@ def _surface_distances(
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
     spacing: tuple[float, float, float],
+    batch_size: int = 512,
 ) -> torch.Tensor | float:
     """
     Calculate symmetric foreground-surface distances for two masks.
@@ -333,6 +336,9 @@ def _surface_distances(
 
     spacing : tuple[float, float, float]
         Physical voxel spacing for the mask axes.
+
+    batch_size : int, optional
+        Number of source surface points per distance chunk. Defaults to 512.
 
     Returns
     -------
@@ -372,8 +378,8 @@ def _surface_distances(
     # Use both directions so HD is symmetric
     distances = torch.cat(
         [
-            _nearest_distances(pred_points, ref_points),
-            _nearest_distances(ref_points, pred_points),
+            _nearest_distances(pred_points, ref_points, batch_size=batch_size),
+            _nearest_distances(ref_points, pred_points, batch_size=batch_size),
         ]
     )
 

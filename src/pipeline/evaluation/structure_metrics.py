@@ -71,6 +71,7 @@ def hausdorff_and_hd95(
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
     spacing: tuple[float, float, float],
+    batch_size: int = 512,
 ) -> tuple[float, float]:
     """
     Calculate HD and HD95 from a single surface-distance pass.
@@ -95,6 +96,9 @@ def hausdorff_and_hd95(
     spacing : tuple[float, float, float]
         Physical voxel spacing for the mask axes.
 
+    batch_size : int, optional
+        Number of source surface points per distance chunk. Defaults to 512.
+
     Returns
     -------
     metrics : tuple[float, float]
@@ -107,9 +111,12 @@ def hausdorff_and_hd95(
         If either mask has zero elements.
         If either mask is not 3-dimensional.
         If the masks have different shapes.
+        If ``batch_size`` is not positive.
     """
 
-    distances = _surface_distances(pred, ref, spacing)
+    if batch_size <= 0:
+        raise ValueError("`batch_size` must be positive")
+    distances = _surface_distances(pred, ref, spacing, batch_size=batch_size)
 
     if isinstance(distances, float):
         return distances, distances
