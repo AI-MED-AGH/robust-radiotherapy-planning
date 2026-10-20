@@ -29,12 +29,18 @@ class MaisiTrainingConfig:
     - MAISI model weights are stored in (the resulting ones and the ones used for warm starting):
         RESULTS/weights/
 
-    Pipeline stages
+    DL Pipeline stages
     ---------------
     1. Prepare CT data for training by convering it to .pt format (`prepare_data.py`).
     2. Train the VAE (`train_vae.py`).
     3. Encode CTs into the latent space using the VAE (`encode_data.py`).
     4. Train the Rectified Flow U-Net (`train_rflow.py`).
+
+    PCA Pipeline stages
+    ---------------
+    1. Prepare CT data for training by convering it to .pt format (`prepare_data.py`).
+    2. Fit DVFs for training CTs (`prepare_dvfs.py`).
+    3. Fit the global PCA model (`train_pca.py`).
 
     Parameters
     ----------
@@ -58,6 +64,15 @@ class MaisiTrainingConfig:
 
     latent_ct_dir_val : Path
         Directory where compressed validation latent arrays (.pt) are stored or generated.
+
+    dvf_dir_train : Path
+        Directory where fitted DVFs are saved.
+
+    pca_model_dir : Path
+        Directory where the PCA model is saved.
+
+    atlas_ct_path : Path
+        Output destination for the atlas CT (average planning CT).
 
     rflow_weight_path : Path
         Output destination for Rectified Flow weights saved throughout training.
@@ -206,6 +221,11 @@ class MaisiTrainingConfig:
     processed_ct_dir_val: Path = Path("RESULTS/MAISI_TRAINING/processed_ct/val")
     latent_ct_dir_train: Path = Path("RESULTS/MAISI_TRAINING/latents/train")
     latent_ct_dir_val: Path = Path("RESULTS/MAISI_TRAINING/latents/val")
+    dvf_dir_train: Path = Path("RESULTS/MAISI_TRAINING/dvfs/train")
+    pca_model_dir: Path = Path("RESULTS/MAISI_TRAINING/pca")
+
+    # Where to save the atlas CT
+    atlas_ct_path: Path = Path("RESULTS/MAISI_TRAINING/atlas.pt")
 
     # Model weights
     rflow_weight_path: Path = Path("RESULTS/weights/diff_unet_3d_rflow-ct.pt")
@@ -425,6 +445,8 @@ class MaisiTrainingConfig:
         self.processed_ct_dir_val.mkdir(parents=True, exist_ok=True)
         self.latent_ct_dir_train.mkdir(parents=True, exist_ok=True)
         self.latent_ct_dir_val.mkdir(parents=True, exist_ok=True)
+        self.dvf_dir_train.mkdir(parents=True, exist_ok=True)
+        self.pca_model_dir.mkdir(parents=True, exist_ok=True)
         self.rflow_weights_path.mkdir(parents=True, exist_ok=True)
         self.vae_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
