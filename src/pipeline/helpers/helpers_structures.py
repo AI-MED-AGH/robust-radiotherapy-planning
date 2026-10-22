@@ -1,4 +1,5 @@
 import logging
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,9 @@ class _StructureRegistrationResult:
 
     warning : str | None, optional
         Warning message to emit when the generated CT cannot be evaluated.
+
+    masks : dict[int, torch.Tensor] | None, optional
+        Complete cached masks. A cache hit needs neither a CT nor a transform.
     """
 
     gen_path: Path
@@ -68,6 +72,70 @@ class _StructureRegistrationResult:
     transform: Any | None
     info_message: str | None = None
     warning: str | None = None
+    masks: dict[int, torch.Tensor] | None = None
+
+
+@dataclass
+class _PlanningRegistrationData:
+    """
+    Store reusable planning images for one patient's registrations and mask warps.
+
+    Registration reads the planning CT and its pyramid without modifying them.
+    The mask consumer initializes the label image once, allowing mask warping
+    to overlap with the next background registration for the same patient.
+
+    Attributes
+    ----------
+    image : sitk.Image
+        Full-resolution planning CT with pipeline geometry and float32 pixels.
+
+    levels : list[sitk.Image]
+        Smoothed planning CT pyramid in configured shrink-factor order,
+        excluding the full-resolution image.
+
+    labels : sitk.Image | None, optional
+        Full-resolution planning structure label image with signed 16-bit
+        pixels, or ``None`` until the first successful registration needs masks.
+    """
+
+    image: sitk.Image
+    levels: list[sitk.Image]
+    labels: sitk.Image | None = None
+
+
+def _prepare_planning_registration(planning_ct: torch.Tensor, config: MaisiTestingConfig) -> _PlanningRegistrationData:
+    """
+    Prepare the planning CT and its registration pyramid once per patient.
+
+    Convert the CPU planning tensor to a SimpleITK image and construct each
+    moving-image pyramid level with the configured smoothing and shrink factor.
+    The result is reused across generated CTs with the same configuration.
+    Structure labels are initialized separately when mask warping needs them.
+
+    Parameters
+    ----------
+    planning_ct : torch.Tensor
+        Planning CT in HU-like units with shape ``[H, W, D]``.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing voxel spacing, pyramid shrink factors,
+        and per-level smoothing sigmas.
+
+    Returns
+    -------
+    planning_registration : _PlanningRegistrationData
+        Planning image and pyramid ready for reuse, with no label image loaded.
+    """
+    moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
+    levels = [
+        _smooth_and_resample(moving, factor, sigma)
+        for factor, sigma in zip(
+            config.structure_registration_shrink_factors,
+            config.structure_registration_smoothing_sigmas,
+            strict=True,
+        )
+    ]
+    return _PlanningRegistrationData(moving, levels)
 
 
 def _get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
@@ -402,13 +470,99 @@ def _warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_p
     return config.warped_structure_cache_dir / patient_id / f"{_normalised_image_key(generated_ct_path)}.pt"
 
 
+def _warped_structure_cache_metadata(
+    config: MaisiTestingConfig, generated_ct_path: Path, planning_ct_path: Path
+) -> dict[str, Any]:
+    """
+    Identify source files and settings for persisted warped structure masks.
+
+    Use resolved paths, file sizes, and modification times to identify the
+    generated CT, planning CT, and planning structures without loading their
+    contents. Include geometry, intensity conversion, labels, and registration
+    settings so incompatible persisted masks can be rejected.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Pipeline configuration containing structure paths, image geometry,
+        intensity limits, requested labels, and registration settings.
+
+    generated_ct_path : Path
+        Generated CT tensor file whose anatomy defines the warped-mask grid.
+
+    planning_ct_path : Path
+        Planning CT tensor file used to locate the source structure label map.
+
+    Returns
+    -------
+    metadata : dict[str, Any]
+        Cache format version, source-file identities, and settings required to
+        validate persisted masks.
+
+    Raises
+    ------
+    OSError
+        If a source file cannot be accessed to read its filesystem metadata.
+    """
+    sources = [generated_ct_path, planning_ct_path, _structure_path_for_ct(planning_ct_path, config)]
+    return {
+        "version": 1,
+        "sources": [(str(path.resolve()), path.stat().st_size, path.stat().st_mtime_ns) for path in sources],
+        "spacing": tuple(config.spacing),
+        "target_image_size": tuple(config.target_image_size),
+        "hu_range": (config.data_min, config.data_max),
+        "labels": tuple(config.structure_labels),
+        "iterations": config.structure_registration_iterations,
+        "sigma": config.structure_registration_sigma,
+        "shrink_factors": tuple(config.structure_registration_shrink_factors),
+        "smoothing_sigmas": tuple(config.structure_registration_smoothing_sigmas),
+    }
+
+
+def _complete_warped_structure_masks(
+    masks: dict[int, torch.Tensor] | None, labels: list[int], shape: tuple[int, ...]
+) -> bool:
+    """
+    Check that a run-local mask cache contains every requested output mask.
+
+    Require tensor values with the expected output shape before bypassing
+    registration. These dictionaries belong to one evaluation run with fixed
+    inputs and settings; persisted entries additionally require source and
+    configuration metadata validation.
+
+    Parameters
+    ----------
+    masks : dict[int, torch.Tensor] | None
+        Cached masks keyed by structure label, or ``None`` for a cache miss.
+
+    labels : list[int]
+        Structure labels that must all be present in the cache.
+
+    shape : tuple[int, ...]
+        Expected spatial shape of every requested mask.
+
+    Returns
+    -------
+    complete : bool
+        Whether the cache contains a tensor with the expected shape for every
+        requested label.
+    """
+    return masks is not None and all(
+        isinstance(masks.get(label), torch.Tensor) and tuple(masks[label].shape) == shape for label in labels
+    )
+
+
 def _save_warped_structure_masks(
     config: MaisiTestingConfig,
     generated_ct_path: Path,
     masks: dict[int, torch.Tensor],
+    planning_ct_path: Path,
 ) -> None:
     """
     Persist generated-space warped structure masks for reuse by dose metrics.
+
+    Store CPU boolean masks together with source-file and configuration
+    metadata. Later evaluations can validate the cache before reusing it.
 
     Parameters
     ----------
@@ -420,19 +574,38 @@ def _save_warped_structure_masks(
 
     masks : dict[int, torch.Tensor]
         CPU or GPU boolean masks keyed by structure label.
+
+    planning_ct_path : Path
+        Planning CT source used to validate the cache's input files.
+
+    Returns
+    -------
+    None
+        Masks and validation metadata are written to the configured cache file.
     """
 
     cache_path = _warped_structure_mask_cache_path(config, generated_ct_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({label: mask.detach().cpu().bool() for label, mask in masks.items()}, cache_path)
+    torch.save(
+        {
+            "metadata": _warped_structure_cache_metadata(config, generated_ct_path, planning_ct_path),
+            "masks": {label: mask.detach().cpu().bool() for label, mask in masks.items()},
+        },
+        cache_path,
+    )
 
 
 def _load_warped_structure_masks(
     config: MaisiTestingConfig,
     generated_ct_path: Path,
+    planning_ct_path: Path,
 ) -> dict[int, torch.Tensor] | None:
     """
     Load persisted generated-space warped structure masks when available.
+
+    Validate source-file identities, configuration, requested labels, and mask
+    shapes before returning CPU boolean tensors. Missing, unreadable, legacy,
+    incomplete, or incompatible cache files are treated as cache misses.
 
     Parameters
     ----------
@@ -441,6 +614,9 @@ def _load_warped_structure_masks(
 
     generated_ct_path : Path
         Generated CT tensor path used as the cache key.
+
+    planning_ct_path : Path
+        Planning CT source whose image and structure file must match the cache.
 
     Returns
     -------
@@ -453,9 +629,18 @@ def _load_warped_structure_masks(
     if not cache_path.exists():
         return None
 
-    loaded = torch.load(cache_path, weights_only=True)
-    if not isinstance(loaded, dict):
+    try:
+        loaded = torch.load(cache_path, weights_only=True, map_location="cpu")
+        metadata = _warped_structure_cache_metadata(config, generated_ct_path, planning_ct_path)
+    except (OSError, RuntimeError, EOFError, pickle.UnpicklingError):
+        logger.warning("Ignoring unreadable warped-structure cache: %s", cache_path)
+        return None
+    if not isinstance(loaded, dict) or loaded.get("metadata") != metadata:
         logger.warning("Ignoring invalid warped-structure cache: %s", cache_path)
+        return None
+
+    loaded = loaded.get("masks")
+    if not isinstance(loaded, dict):
         return None
 
     masks: dict[int, torch.Tensor] = {}
@@ -464,7 +649,7 @@ def _load_warped_structure_masks(
         if value is None:
             value = loaded.get(str(label))
 
-        if not isinstance(value, torch.Tensor):
+        if not isinstance(value, torch.Tensor) or tuple(value.shape) != tuple(config.target_image_size):
             logger.warning("Ignoring incomplete warped-structure cache: %s", cache_path)
             return None
 
@@ -492,8 +677,8 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
         Pipeline configuration containing voxel spacing.
 
     pixel_id : int
-        SimpleITK pixel type, usually ``sitk.sitkFloat32`` for CT images or
-        ``sitk.sitkUInt8`` for masks.
+        Supported SimpleITK pixel type: ``sitk.sitkFloat32`` for CT images,
+        ``sitk.sitkUInt8`` for binary masks, or ``sitk.sitkInt16`` for label maps.
 
     Returns
     -------
@@ -503,7 +688,8 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
     arr = tensor.detach().cpu().numpy()
     arr = np.transpose(arr, (2, 1, 0))
-    image = sitk.GetImageFromArray(arr.astype(np.float32 if pixel_id == sitk.sitkFloat32 else np.uint8))
+    dtype = {sitk.sitkFloat32: np.float32, sitk.sitkUInt8: np.uint8, sitk.sitkInt16: np.int16}[pixel_id]
+    image = sitk.GetImageFromArray(arr.astype(dtype, copy=False))
     image.SetSpacing(config.spacing)  # type: ignore[no-untyped-call]
     image.SetOrigin((0.0, 0.0, 0.0))  # type: ignore[no-untyped-call]
     image.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))  # type: ignore[no-untyped-call]
@@ -591,14 +777,15 @@ def _multiscale_demons(
     initial_transform: sitk.Transform,
     shrink_factors: list[float],
     smoothing_sigmas: list[float],
+    moving_levels: list[sitk.Image] | None = None,
 ) -> sitk.DisplacementFieldTransform:
     """
     Run demons registration from coarse to full resolution.
 
     This helper initializes a displacement field on the coarsest requested
     level, then refines it toward the original image grid one level at a time.
-    It creates only the current fixed/moving pyramid images, rather than
-    keeping the full pyramid in memory.
+    Fixed pyramid levels are created on demand. Moving levels can be supplied
+    from a patient-scoped cache to avoid rebuilding them for every generated CT.
 
     Parameters
     ----------
@@ -621,6 +808,9 @@ def _multiscale_demons(
     smoothing_sigmas : list[float]
         Gaussian smoothing sigmas for each shrink factor.
 
+    moving_levels : list[sitk.Image] | None, optional
+        Precomputed moving images in shrink-factor order, excluding full resolution.
+
     Returns
     -------
     transform : sitk.DisplacementFieldTransform
@@ -632,7 +822,11 @@ def _multiscale_demons(
     if len(pyramid_levels) > 0:
         first_shrink_factor, first_smoothing_sigma = pyramid_levels[0]
         fixed_level = _smooth_and_resample(fixed_image, first_shrink_factor, first_smoothing_sigma)
-        moving_level = _smooth_and_resample(moving_image, first_shrink_factor, first_smoothing_sigma)
+        moving_level = (
+            moving_levels[0]
+            if moving_levels is not None
+            else _smooth_and_resample(moving_image, first_shrink_factor, first_smoothing_sigma)
+        )
         remaining_levels = pyramid_levels[1:]
     else:
         fixed_level = fixed_image
@@ -657,9 +851,13 @@ def _multiscale_demons(
         displacement_field,
     )
 
-    for shrink_factor, smoothing_sigma in remaining_levels:
+    for level_index, (shrink_factor, smoothing_sigma) in enumerate(remaining_levels, start=1):
         fixed_level = _smooth_and_resample(fixed_image, shrink_factor, smoothing_sigma)
-        moving_level = _smooth_and_resample(moving_image, shrink_factor, smoothing_sigma)
+        moving_level = (
+            moving_levels[level_index]
+            if moving_levels is not None
+            else _smooth_and_resample(moving_image, shrink_factor, smoothing_sigma)
+        )
 
         # Carry the current DVF estimate onto the next finer fixed-image grid
         displacement_field = sitk.Resample(displacement_field, fixed_level)
@@ -684,6 +882,7 @@ def _register_planning_ct_to_generated_ct(
     planning_ct: torch.Tensor,
     generated_ct: torch.Tensor,
     config: MaisiTestingConfig,
+    planning_registration: _PlanningRegistrationData | None = None,
 ) -> Any:
     """
     Register a planning CT to a generated CT.
@@ -706,6 +905,9 @@ def _register_planning_ct_to_generated_ct(
         Pipeline configuration containing spacing and demons-registration
         settings.
 
+    planning_registration : _PlanningRegistrationData | None, optional
+        Patient-scoped planning image and pyramid for the same configuration.
+
     Returns
     -------
     transform : Any
@@ -716,7 +918,11 @@ def _register_planning_ct_to_generated_ct(
     # SimpleITK registration runs on CPU.
     # These conversions detach tensors from any accelerator residency.
     fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
-    moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
+    moving = (
+        planning_registration.image
+        if planning_registration is not None
+        else _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
+    )
 
     demons_filter = sitk.DiffeomorphicDemonsRegistrationFilter()  # type: ignore[no-untyped-call]
     demons_filter.SetNumberOfIterations(config.structure_registration_iterations)  # type: ignore[no-untyped-call]
@@ -739,6 +945,7 @@ def _register_planning_ct_to_generated_ct(
         initial_transform=initial_transform,
         shrink_factors=config.structure_registration_shrink_factors,
         smoothing_sigmas=config.structure_registration_smoothing_sigmas,
+        moving_levels=planning_registration.levels if planning_registration is not None else None,
     )
 
 
@@ -777,12 +984,14 @@ def _warp_planning_mask_to_generated_ct(
     """
 
     # The generated CT is used only as the reference grid: size, spacing,
-    # origin, and direction define where the warped planning mask is sampled
-    fixed = _tensor_to_sitk_image(generated_ct, config, sitk.sitkFloat32)
+    # origin, and direction define where the warped planning mask is sampled.
+    # Pipeline images have zero origin and identity direction, matching the
+    # resampler defaults. No generated CT pixels need to be copied.
     moving_mask = _tensor_to_sitk_image(planning_mask.to(torch.uint8), config, sitk.sitkUInt8)
 
     resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
-    resampler.SetReferenceImage(fixed)  # type: ignore[no-untyped-call]
+    resampler.SetSize(tuple(generated_ct.shape))  # type: ignore[no-untyped-call]
+    resampler.SetOutputSpacing(config.spacing)  # type: ignore[no-untyped-call]
     resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
     resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
     resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
@@ -791,11 +1000,65 @@ def _warp_planning_mask_to_generated_ct(
     return _sitk_image_to_tensor(warped) > 0
 
 
+def _warp_planning_labels_to_generated_ct(
+    planning_label_map: torch.Tensor | sitk.Image,
+    generated_ct: torch.Tensor,
+    transform: Any,
+    config: MaisiTestingConfig,
+) -> dict[int, torch.Tensor]:
+    """
+    Warp planning labels into generated CT space and extract binary masks.
+
+    Nearest-neighbor sampling commutes with label extraction, including the
+    aggregate foreground label (<= 0). Signed 16-bit pixels preserve the
+    preprocessed label map's values without the UInt8 truncation of labels.
+    A preconverted SimpleITK image can be reused across generated CTs.
+
+    Parameters
+    ----------
+    planning_label_map : torch.Tensor | sitk.Image
+        Planning structure labels as an integer tensor with shape
+        ``[H, W, D]`` or a preconverted SimpleITK image with pipeline geometry.
+
+    generated_ct : torch.Tensor
+        Generated CT tensor whose spatial shape defines the output grid.
+        Its voxel intensities are not read during mask resampling.
+
+    transform : Any
+        SimpleITK transform mapping generated-grid physical points back into
+        planning label-map space.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing voxel spacing and requested labels.
+        Output origin is zero and direction is identity, as in CT conversion.
+
+    Returns
+    -------
+    masks : dict[int, torch.Tensor]
+        CPU boolean masks on the generated CT grid, keyed by requested label.
+        Labels less than or equal to zero select all non-background structures.
+    """
+    moving = (
+        planning_label_map
+        if isinstance(planning_label_map, sitk.Image)
+        else _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
+    )
+    resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
+    resampler.SetSize(tuple(generated_ct.shape))  # type: ignore[no-untyped-call]
+    resampler.SetOutputSpacing(config.spacing)  # type: ignore[no-untyped-call]
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
+    resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]
+    resampler.SetTransform(transform)  # type: ignore[no-untyped-call]
+    warped_labels = _sitk_image_to_tensor(resampler.Execute(moving))  # type: ignore[no-untyped-call]
+    return {label: _label_to_binary_mask(warped_labels, label) for label in config.structure_labels}
+
+
 def _calculate_structure_registration_result(
     gen_path: Path,
     patient_id: str,
     planning_ct: torch.Tensor,
     config: MaisiTestingConfig,
+    planning_registration: _PlanningRegistrationData | None = None,
 ) -> _StructureRegistrationResult:
     """
     Load one generated CT and calculate its planning-to-generated transform.
@@ -819,6 +1082,9 @@ def _calculate_structure_registration_result(
     config : MaisiTestingConfig
         Pipeline configuration containing CT intensity range, spacing, and
         demons-registration settings.
+
+    planning_registration : _PlanningRegistrationData | None, optional
+        Reusable planning image and pyramid built with the same configuration.
 
     Returns
     -------
@@ -846,6 +1112,7 @@ def _calculate_structure_registration_result(
         planning_ct=planning_ct,
         generated_ct=gen_ct,
         config=config,
+        planning_registration=planning_registration,
     )
 
     return _StructureRegistrationResult(
