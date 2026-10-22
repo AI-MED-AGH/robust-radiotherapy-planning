@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import SimpleITK as sitk
 import torch
 from monai.data.meta_tensor import MetaTensor
 from monai.transforms import (  # type: ignore[attr-defined]
@@ -28,12 +29,16 @@ from src.pipeline.helpers.helpers import (
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _calculate_structure_registration_result,
+    _complete_warped_structure_masks,
     _label_to_binary_mask,
     _load_structure_label_map,
     _load_warped_structure_masks,
+    _PlanningRegistrationData,
+    _prepare_planning_registration,
     _save_warped_structure_masks,
     _structure_path_for_ct,
-    _warp_planning_mask_to_generated_ct,
+    _tensor_to_sitk_image,
+    _warp_planning_labels_to_generated_ct,
 )
 
 logger = logging.getLogger(__name__)
@@ -654,6 +659,7 @@ def _warp_planning_masks_for_predicted_dose(
     planning_label_map_cache: dict[str, torch.Tensor],
     generated_mask_cache: WarpedStructureMaskCache,
     config: MaisiTestingConfig,
+    planning_registration_cache: dict[str, _PlanningRegistrationData] | None = None,
 ) -> tuple[dict[int, torch.Tensor] | None, str, str | None, str | None]:
     """
     Warp planning structures into generated-dose space when possible.
@@ -694,6 +700,11 @@ def _warp_planning_masks_for_predicted_dose(
         Pipeline configuration containing CT, structure, and registration
         settings.
 
+    planning_registration_cache : dict[str, _PlanningRegistrationData] | None, optional
+        Patient-scoped planning images, pyramids, and lazily initialized label
+        images reused across cache misses. If ``None``, no prepared planning
+        images are retained for subsequent calls.
+
     Returns
     -------
     result : tuple[dict[int, torch.Tensor] | None, str, str | None, str | None]
@@ -719,13 +730,8 @@ def _warp_planning_masks_for_predicted_dose(
     # Check the current run's cache before touching disk or running deformable
     # registration, which is the most expensive path through this helper
     cached_masks = generated_mask_cache.get(gen_ct_path)
-    if cached_masks is not None:
+    if _complete_warped_structure_masks(cached_masks, config.structure_labels, tuple(pred_dose.shape)):
         return cached_masks, "warped_planning_structure_to_generated_ct", None, None
-
-    persisted_masks = _load_warped_structure_masks(config, gen_ct_path)
-    if persisted_masks is not None:
-        generated_mask_cache[gen_ct_path] = persisted_masks
-        return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
 
     planning_ct_path = _planning_ct_path_for_patient(patient_id, config)
     if planning_ct_path is None:
@@ -745,6 +751,11 @@ def _warp_planning_masks_for_predicted_dose(
             f"Using reference-space dose masks for {pred_path}: missing {planning_structure_path}",
         )
 
+    persisted_masks = _load_warped_structure_masks(config, gen_ct_path, planning_ct_path)
+    if persisted_masks is not None and all(mask.shape == pred_dose.shape for mask in persisted_masks.values()):
+        generated_mask_cache[gen_ct_path] = persisted_masks
+        return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
+
     cpu_device = torch.device("cpu")
     planning_ct = planning_ct_cache.get(patient_id)
     if planning_ct is None:
@@ -756,6 +767,13 @@ def _warp_planning_masks_for_predicted_dose(
         planning_label_map = _load_structure_label_map(planning_structure_path, structure_transform)
         planning_label_map_cache[patient_id] = planning_label_map
 
+    planning_registration = None
+    if planning_registration_cache is not None:
+        planning_registration = planning_registration_cache.get(patient_id)
+        if planning_registration is None:
+            planning_registration = _prepare_planning_registration(planning_ct, config)
+            planning_registration_cache[patient_id] = planning_registration
+
     # Registration estimates the planning-to-generated deformation shared by
     # every configured structure label for this generated CT.
     result = _calculate_structure_registration_result(
@@ -763,6 +781,7 @@ def _warp_planning_masks_for_predicted_dose(
         patient_id=patient_id,
         planning_ct=planning_ct,
         config=config,
+        planning_registration=planning_registration,
     )
 
     if result.warning is not None:
@@ -785,21 +804,16 @@ def _warp_planning_masks_for_predicted_dose(
             f"{pred_path}: generated CT {tuple(result.gen_ct.shape)} vs dose {tuple(pred_dose.shape)}",
         )
 
-    warped_masks: dict[int, torch.Tensor] = {}
-    for label in config.structure_labels:
-        # Warp one planning label at a time with nearest-neighbor sampling so
-        # target/OAR identities stay categorical after DVF resampling.
-        warped_masks[label] = _warp_planning_mask_to_generated_ct(
-            planning_mask=_label_to_binary_mask(planning_label_map, label),
-            generated_ct=result.gen_ct,
-            transform=result.transform,
-            config=config,
-        )
+    if planning_registration is not None and planning_registration.labels is None:
+        planning_registration.labels = _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
+    moving_labels = planning_registration.labels if planning_registration is not None else planning_label_map
+    assert moving_labels is not None
+    warped_masks = _warp_planning_labels_to_generated_ct(moving_labels, result.gen_ct, result.transform, config)
 
     # Persist successful warps so both later dose comparisons and future runs
     # can bypass registration for this generated anatomy
     generated_mask_cache[gen_ct_path] = warped_masks
-    _save_warped_structure_masks(config, gen_ct_path, warped_masks)
+    _save_warped_structure_masks(config, gen_ct_path, warped_masks, planning_ct_path)
 
     return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
 
