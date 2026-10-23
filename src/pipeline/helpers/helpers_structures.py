@@ -126,6 +126,7 @@ def _prepare_planning_registration(planning_ct: torch.Tensor, config: MaisiTesti
     planning_registration : _PlanningRegistrationData
         Planning image and pyramid ready for reuse, with no label image loaded.
     """
+
     moving = _tensor_to_sitk_image(planning_ct, config, sitk.sitkFloat32)
     levels = [
         _smooth_and_resample(moving, factor, sigma)
@@ -504,6 +505,7 @@ def _warped_structure_cache_metadata(
     OSError
         If a source file cannot be accessed to read its filesystem metadata.
     """
+
     sources = [generated_ct_path, planning_ct_path, _structure_path_for_ct(planning_ct_path, config)]
     return {
         "version": 1,
@@ -547,6 +549,7 @@ def _complete_warped_structure_masks(
         Whether the cache contains a tensor with the expected shape for every
         requested label.
     """
+    
     return masks is not None and all(
         isinstance(masks.get(label), torch.Tensor) and tuple(masks[label].shape) == shape for label in labels
     )
