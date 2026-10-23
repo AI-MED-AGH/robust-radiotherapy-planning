@@ -804,10 +804,11 @@ def _warp_planning_masks_for_predicted_dose(
             f"{pred_path}: generated CT {tuple(result.gen_ct.shape)} vs dose {tuple(pred_dose.shape)}",
         )
 
-    if planning_registration is not None and planning_registration.labels is None:
-        planning_registration.labels = _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
-    moving_labels = planning_registration.labels if planning_registration is not None else planning_label_map
-    assert moving_labels is not None
+    moving_labels: torch.Tensor | sitk.Image = planning_label_map
+    if planning_registration is not None:
+        if planning_registration.labels is None:
+            planning_registration.labels = _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
+        moving_labels = planning_registration.labels
     warped_masks = _warp_planning_labels_to_generated_ct(moving_labels, result.gen_ct, result.transform, config)
 
     # Persist successful warps so both later dose comparisons and future runs

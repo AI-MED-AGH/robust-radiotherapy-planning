@@ -329,16 +329,14 @@ def calculate_structure_similarity_metrics(
                 info_messages.append(result.info_message)
 
             generated_masks = result.masks
-            if generated_masks is None and (result.gen_ct is None or result.transform is None):
-                warnings.append(
-                    f"Skipping structure metrics for {current_patient_id}: registration failed for {result.gen_path}"
-                )
-                return
-
             with torch.inference_mode():
                 if generated_masks is None:
-                    assert result.gen_ct is not None and result.transform is not None
-                    assert current_planning_registration is not None
+                    if result.gen_ct is None or result.transform is None or current_planning_registration is None:
+                        warnings.append(
+                            f"Skipping structure metrics for {current_patient_id}: "
+                            f"registration failed for {result.gen_path}"
+                        )
+                        return
                     if current_planning_registration.labels is None:
                         planning_label_map = _load_structure_label_map(
                             current_planning_structure_path, structure_transform
