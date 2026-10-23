@@ -33,6 +33,7 @@ from src.pipeline.helpers.helpers_structures import (
     _get_structure_label_transform,
     _label_to_binary_mask,
     _load_structure_label_map,
+    _PlanningRegistrationData,
     _structure_path_for_ct,
 )
 
@@ -478,6 +479,7 @@ def _evaluate_dose_on_generated_structures(
         patient_dose = dose_groups.get(patient_id)
         planning_ct_cache: dict[str, torch.Tensor] = {}
         planning_label_map_cache: dict[str, torch.Tensor] = {}
+        planning_registration_cache: dict[str, _PlanningRegistrationData] = {}
         for generated_path in sorted(generated_paths):
             # Use the same patient-dose/clinical-fallback policy for generated
             # and observed real anatomies.
@@ -501,6 +503,7 @@ def _evaluate_dose_on_generated_structures(
                 planning_label_map_cache=planning_label_map_cache,
                 generated_mask_cache=warped_mask_cache,
                 config=config,
+                planning_registration_cache=planning_registration_cache,
             )
             if warning is not None:
                 logger.warning(warning)
