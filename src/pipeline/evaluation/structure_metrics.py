@@ -345,7 +345,7 @@ def calculate_structure_similarity_metrics(
                             planning_label_map, config, sitk.sitkInt16
                         )
                     generated_masks = _warp_planning_labels_to_generated_ct(
-                        current_planning_registration.labels, result.gen_ct, result.transform, config
+                        current_planning_registration.labels, result.transform, config
                     )
                     _save_warped_structure_masks(config, result.gen_path, generated_masks, current_planning_ct_path)
                 warped_mask_cache[result.gen_path] = generated_masks

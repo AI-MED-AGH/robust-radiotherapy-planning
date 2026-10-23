@@ -549,7 +549,7 @@ def _complete_warped_structure_masks(
         Whether the cache contains a tensor with the expected shape for every
         requested label.
     """
-    
+
     return masks is not None and all(
         isinstance(masks.get(label), torch.Tensor) and tuple(masks[label].shape) == shape for label in labels
     )
@@ -1005,7 +1005,6 @@ def _warp_planning_mask_to_generated_ct(
 
 def _warp_planning_labels_to_generated_ct(
     planning_label_map: torch.Tensor | sitk.Image,
-    generated_ct: torch.Tensor,
     transform: Any,
     config: MaisiTestingConfig,
 ) -> dict[int, torch.Tensor]:
@@ -1023,16 +1022,13 @@ def _warp_planning_labels_to_generated_ct(
         Planning structure labels as an integer tensor with shape
         ``[H, W, D]`` or a preconverted SimpleITK image with pipeline geometry.
 
-    generated_ct : torch.Tensor
-        Generated CT tensor whose spatial shape defines the output grid.
-        Its voxel intensities are not read during mask resampling.
-
     transform : Any
         SimpleITK transform mapping generated-grid physical points back into
         planning label-map space.
 
     config : MaisiTestingConfig
-        Pipeline configuration containing voxel spacing and requested labels.
+        Pipeline configuration containing target image size, voxel spacing,
+        and requested labels. The target image size defines the output grid.
         Output origin is zero and direction is identity, as in CT conversion.
 
     Returns
@@ -1041,14 +1037,14 @@ def _warp_planning_labels_to_generated_ct(
         CPU boolean masks on the generated CT grid, keyed by requested label.
         Labels less than or equal to zero select all non-background structures.
     """
-    
+
     moving = (
         planning_label_map
         if isinstance(planning_label_map, sitk.Image)
         else _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
     )
     resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
-    resampler.SetSize(tuple(generated_ct.shape))  # type: ignore[no-untyped-call]
+    resampler.SetSize(config.target_image_size)  # type: ignore[no-untyped-call]
     resampler.SetOutputSpacing(config.spacing)  # type: ignore[no-untyped-call]
     resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # type: ignore[no-untyped-call]
     resampler.SetDefaultPixelValue(0)  # type: ignore[no-untyped-call]

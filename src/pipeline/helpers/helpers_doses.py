@@ -809,7 +809,7 @@ def _warp_planning_masks_for_predicted_dose(
         if planning_registration.labels is None:
             planning_registration.labels = _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
         moving_labels = planning_registration.labels
-    warped_masks = _warp_planning_labels_to_generated_ct(moving_labels, result.gen_ct, result.transform, config)
+    warped_masks = _warp_planning_labels_to_generated_ct(moving_labels, result.transform, config)
 
     # Persist successful warps so both later dose comparisons and future runs
     # can bypass registration for this generated anatomy
