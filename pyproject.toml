@@ -2,7 +2,7 @@
 [project]
 name = "robust-radiotherapy-planning"
 version = "0.1.0"
-requires-python = "==3.11.15"
+requires-python = "==3.12.15"
 dependencies = [
     "einops>=0.8.2,<1.0.0",
     "jupyter>=1.1.1,<2.0.0",
@@ -23,7 +23,7 @@ dependencies = [
     "wandb>=0.27.0,<1.0.0",
 ]
 
-# Allow for optionally installing the GPU version of PyTorch
+# Define the CUDA PyTorch extra
 [project.optional-dependencies]
 gpu = [
     "torch>=2.11.0,<3.0.0",
@@ -36,7 +36,7 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
-# If the "gpu" extra is requested, get PyTorch from the GPU index
+# Resolve PyTorch from the CUDA index for the "gpu" extra
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cu128", extra = "gpu" },
@@ -47,7 +47,7 @@ torchvision = [
 
 # Ruff configuration
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 
 # Include Jupyter Notebooks for Ruff
@@ -74,7 +74,7 @@ quote-style = "double"
 
 # Mypy configuration
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 
 # Explicitly exclude the notebooks directory from type checking
