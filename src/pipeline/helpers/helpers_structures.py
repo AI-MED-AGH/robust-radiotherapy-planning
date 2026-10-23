@@ -565,7 +565,10 @@ def _save_warped_structure_masks(
     Persist generated-space warped structure masks for reuse by dose metrics.
 
     Store CPU boolean masks together with source-file and configuration
-    metadata. Later evaluations can validate the cache before reusing it.
+    metadata. Structure and dose metrics can reuse these masks within the
+    current evaluation or in evaluation-only reruns with matching inputs and
+    settings. ``generate_ct_variants`` clears this disk cache before generating
+    new CTs.
 
     Parameters
     ----------
@@ -609,6 +612,8 @@ def _load_warped_structure_masks(
     Validate source-file identities, configuration, requested labels, and mask
     shapes before returning CPU boolean tensors. Missing, unreadable, legacy,
     incomplete, or incompatible cache files are treated as cache misses.
+    Evaluation-only reruns retain this disk cache; ``generate_ct_variants``
+    clears it before generating new CTs.
 
     Parameters
     ----------

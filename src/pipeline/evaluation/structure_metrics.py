@@ -150,7 +150,9 @@ def calculate_structure_similarity_metrics(
         Patient- and label-level summary statistics.
     - warped structure mask cache files
         CPU `.pt` files under `config.warped_structure_cache_dir`, keyed by
-        generated CT, for reuse by dose metrics in later independent runs.
+        generated CT, for reuse by structure and dose metrics in this
+        evaluation or evaluation-only reruns with matching inputs and settings.
+        CT generation clears this cache before generating new samples.
 
     Parameters
     ----------

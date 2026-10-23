@@ -670,6 +670,11 @@ def _warp_planning_masks_for_predicted_dose(
     the resulting DVF. If the generated CT or planning inputs cannot be
     resolved, callers can fall back to same-grid reference masks.
 
+    Successful masks are cached in memory for the current evaluation and on
+    disk in ``config.warped_structure_cache_dir``. Evaluation-only reruns can
+    reuse the disk cache when source files and registration settings match.
+    ``generate_ct_variants`` clears that cache before generating new CTs.
+
     Parameters
     ----------
     pred_path : Path
@@ -811,8 +816,9 @@ def _warp_planning_masks_for_predicted_dose(
         moving_labels = planning_registration.labels
     warped_masks = _warp_planning_labels_to_generated_ct(moving_labels, result.transform, config)
 
-    # Persist successful warps so both later dose comparisons and future runs
-    # can bypass registration for this generated anatomy
+    # Reuse successful warps within this evaluation and save them for
+    # evaluation-only reruns with matching inputs/settings. CT generation
+    # clears the disk cache before replacing the generated anatomy.
     generated_mask_cache[gen_ct_path] = warped_masks
     _save_warped_structure_masks(config, gen_ct_path, warped_masks, planning_ct_path)
 
