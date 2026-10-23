@@ -5,7 +5,7 @@ This file documents the scripts used for training, which are present in the `src
 ## Installing Dependencies
 
 The cluster used for training did not support the use of `docker` or `uv`, so this part of the repository has a requirements file containing all the needed packages (`src/training/requirements.txt`).
-The versions are picked to be as close to the `uv` environment as possible, but naturally reproducibility is lower. Keep in mind that the list assumes that Python is running on Linux. Here is the command to install the dependencies through a requirements file (make sure to do in a virtual environment from the project root):
+The versions are picked to be as close to the `uv` environment as possible, but naturally reproducibility is lower. Use Python 3.12.15 on Linux for this requirements file. Here is the command to install the dependencies through a requirements file (make sure to do in a virtual environment from the project root):
 
 ```
 pip install -r src/training/requirements.txt

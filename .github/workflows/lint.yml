@@ -16,12 +16,15 @@ jobs:
         with:
           enable-cache: true
           version: "latest"
-        
+
       - name: Set up Python
-        run: uv python install 3.11.15
+        run: uv python install 3.12.15
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
+
+      - name: Check Python and core imports
+        run: uv run python -c "import sys, torch, torchvision, monai, nibabel, SimpleITK; assert sys.version_info[:3] == (3, 12, 15)"
 
       - name: Run Ruff Check
         run: uv run ruff check .
