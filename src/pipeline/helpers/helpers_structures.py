@@ -1041,6 +1041,7 @@ def _warp_planning_labels_to_generated_ct(
         CPU boolean masks on the generated CT grid, keyed by requested label.
         Labels less than or equal to zero select all non-background structures.
     """
+    
     moving = (
         planning_label_map
         if isinstance(planning_label_map, sitk.Image)
