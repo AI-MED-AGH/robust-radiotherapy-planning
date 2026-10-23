@@ -681,7 +681,7 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
     pixel_id : int
         Supported SimpleITK pixel type: ``sitk.sitkFloat32`` for CT images,
-        ``sitk.sitkUInt8`` for binary masks, or ``sitk.sitkInt16`` for label maps.
+        or ``sitk.sitkUInt8`` for binary masks and label maps with labels 0–255.
 
     Returns
     -------
@@ -691,7 +691,7 @@ def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixe
 
     arr = tensor.detach().cpu().numpy()
     arr = np.transpose(arr, (2, 1, 0))
-    dtype = {sitk.sitkFloat32: np.float32, sitk.sitkUInt8: np.uint8, sitk.sitkInt16: np.int16}[pixel_id]
+    dtype = {sitk.sitkFloat32: np.float32, sitk.sitkUInt8: np.uint8}[pixel_id]
     image = sitk.GetImageFromArray(arr.astype(dtype, copy=False))
     image.SetSpacing(config.spacing)  # type: ignore[no-untyped-call]
     image.SetOrigin((0.0, 0.0, 0.0))  # type: ignore[no-untyped-call]
@@ -1012,8 +1012,7 @@ def _warp_planning_labels_to_generated_ct(
     Warp planning labels into generated CT space and extract binary masks.
 
     Nearest-neighbor sampling commutes with label extraction, including the
-    aggregate foreground label (<= 0). Signed 16-bit pixels preserve the
-    preprocessed label map's values without the UInt8 truncation of labels.
+    aggregate foreground label (<= 0). UInt8 pixels preserve all labels (0–255).
     A preconverted SimpleITK image can be reused across generated CTs.
 
     Parameters
@@ -1041,7 +1040,7 @@ def _warp_planning_labels_to_generated_ct(
     moving = (
         planning_label_map
         if isinstance(planning_label_map, sitk.Image)
-        else _tensor_to_sitk_image(planning_label_map, config, sitk.sitkInt16)
+        else _tensor_to_sitk_image(planning_label_map, config, sitk.sitkUInt8)
     )
     resampler = sitk.ResampleImageFilter()  # type: ignore[no-untyped-call]
     resampler.SetSize(config.target_image_size)  # type: ignore[no-untyped-call]
