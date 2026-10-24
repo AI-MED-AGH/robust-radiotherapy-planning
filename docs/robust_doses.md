@@ -14,7 +14,7 @@ This config is required only to **generate new OpenTPS doses**. CTs and dose map
 
 With prepared and generated CTs already available:
 
-```powershell
+```
 uv run python -m src.pipeline.cli dose-generate --opentps-config configs/opentps.json
 uv run python -m src.pipeline.cli dose-evaluate
 ```
@@ -23,7 +23,7 @@ Use the same `--robust-dose-dir` for both commands if you override the default. 
 
 To run the complete pipeline, including dose generation and evaluation:
 
-```powershell
+```
 uv run python -m src.pipeline.cli all --cts-per-patient 5 --rflow-weight-path path/to/model.pt --opentps-config configs/opentps.json
 ```
 
