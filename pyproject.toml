@@ -12,7 +12,7 @@ dependencies = [
     "mypy>=1.20.0,<2.0.0",
     "nibabel>=5.4.2,<6.0.0",
     "numpy>=2.4.4,<3.0.0",
-    "opentps-core==3.0.1",
+    "opentps-core>=3.0.1,<4.0.0",
     "optuna>=4.8.0,<5.0.0",
     "pandas>=2.2,<3.0.0",
     "ruff>=0.15.9,<1.0.0",
@@ -24,7 +24,7 @@ dependencies = [
     "wandb>=0.27.0,<1.0.0",
 ]
 
-# Define the CUDA PyTorch extra
+# Allow for optionally installing the GPU version of PyTorch
 [project.optional-dependencies]
 gpu = [
     "torch>=2.11.0,<3.0.0",
@@ -37,7 +37,7 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
-# Resolve PyTorch from the CUDA index for the "gpu" extra
+# If the "gpu" extra is requested, get PyTorch from the GPU index
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cu128", extra = "gpu" },
