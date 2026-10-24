@@ -1,0 +1,25 @@
+{
+  "model_name": "selected-rflow-model",
+  "beam_model_path": "../machine/BDL.txt",
+  "ct_calibration_dir": "../machine/scanner",
+  "target_label": 1,
+  "prescription_gy": 60.0,
+  "gantry_angles": [0.0, 90.0, 180.0],
+  "couch_angles": [0.0, 0.0, 0.0],
+  "scenario_sets": {
+    "nominal": [],
+    "one_generated": [1],
+    "all_generated": "all"
+  },
+  "oar_limits_gy": {
+    "2": 30.0
+  },
+  "target_weight": 1.0,
+  "oar_weight": 1.0,
+  "spot_spacing_mm": 5.0,
+  "layer_spacing_mm": 5.0,
+  "target_margin_mm": 5.0,
+  "beamlet_primaries": 50000,
+  "dose_primaries": 1000000,
+  "max_iterations": 200
+}

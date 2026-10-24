@@ -2,6 +2,8 @@
 
 from typing import Literal, get_args
 
-PipelineStage = Literal["prepare", "encode", "generate", "evaluate", "dose-evaluate", "all"]
+PipelineStage = Literal[
+    "prepare", "encode", "generate", "evaluate", "dose-generate", "dose-evaluate", "all"
+]
 
 PIPELINE_STAGES: tuple[str, ...] = get_args(PipelineStage)
