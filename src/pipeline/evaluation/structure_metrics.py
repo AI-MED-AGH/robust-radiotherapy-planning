@@ -343,12 +343,11 @@ def calculate_structure_similarity_metrics(
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
             # Prefetch registration for task 0
             first_patient_id, first_gen_path = tasks[0]
-            first_ctx = ctx_mgr.get(first_patient_id)
             next_future = executor.submit(
                 _calculate_structure_registration_result,
                 first_gen_path,
                 first_patient_id,
-                first_ctx.planning_ct,
+                ctx_mgr.get(first_patient_id).planning_ct,
                 config,
             )
 
