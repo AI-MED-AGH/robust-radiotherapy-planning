@@ -1,10 +1,8 @@
 import glob
 import logging
-from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -39,53 +37,6 @@ from src.pipeline.helpers.helpers_structures import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-_Task = TypeVar("_Task")
-_Result = TypeVar("_Result")
-
-
-def _prefetch_dose_data(
-    tasks: Sequence[_Task],
-    load: Callable[[_Task], _Result],
-    device: str,
-) -> Iterator[tuple[_Task, _Result]]:
-    """
-    Yield dose data in input order, prefetching the next task for CUDA evaluation.
-
-    Parameters
-    ----------
-    tasks : Sequence[_Task]
-        Ordered loading or registration tasks, which may span multiple patients.
-    load : Callable[[_Task], _Result]
-        Load or register CPU data for one task and return its result. Calls are
-        serialized so loader caches are not mutated by concurrent loader calls.
-    device : str
-        Metric evaluation device accepted by ``torch.device``, such as ``cpu``
-        or ``cuda:0``. Prefetching is enabled only for CUDA with at least two
-        tasks; otherwise, loading runs sequentially in the caller's thread.
-
-    Yields
-    ------
-    task : _Task
-        Next task in the input sequence.
-    result : _Result
-        Data returned by ``load(task)``, yielded together with the task as a tuple.
-    """
-
-    if torch.device(device).type != "cuda" or len(tasks) < 2:
-        for task in tasks:
-            yield task, load(task)
-        return
-
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dose-registration") as executor:
-        future = executor.submit(load, tasks[0])
-        for index, task in enumerate(tasks):
-            result = future.result()
-            if index + 1 < len(tasks):
-                future = executor.submit(load, tasks[index + 1])
-            yield task, result
-            del result
 
 
 @dataclass

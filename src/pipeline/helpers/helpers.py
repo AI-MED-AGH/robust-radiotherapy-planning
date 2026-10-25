@@ -1,10 +1,67 @@
 import gc
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import torch
+from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
+
+_Task = TypeVar("_Task")
+_Result = TypeVar("_Result")
+
+
+def _run_evaluation_tasks(
+    tasks: Sequence[_Task],
+    prepare: Callable[[_Task], _Result],
+    calculate_metrics: Callable[[_Task, _Result], None],
+    device: str,
+    description: str,
+) -> None:
+    """Prepare evaluation data ahead of metrics using a single CPU worker.
+
+    Parameters
+    ----------
+    tasks : Sequence[_Task]
+        Ordered tasks, including tasks belonging to different patients.
+    prepare : Callable[[_Task], _Result]
+        Load CPU inputs and prepare registration for one task. On CUDA, only
+        the single worker calls this function, so it owns preparation caches.
+        Return any patient context needed by the metric callback with the result.
+    calculate_metrics : Callable[[_Task, _Result], None]
+        Calculate metrics in the caller's thread using the prepared result.
+        Must not mutate preparation caches while the worker is using them.
+    device : str
+        Metric device. CUDA with multiple tasks overlaps preparation of the
+        next task with current metrics; CPU and single-task runs are sequential.
+    description : str
+        Progress-bar description.
+
+    Notes
+    -----
+    Results are consumed in input order with at most one task prefetched.
+    The current result is released after metric calculation. Exceptions from
+    preparation or metric calculation propagate, and the executor waits for
+    any active preparation before exiting.
+    """
+
+    with tqdm(tasks, desc=description) as progress:
+        if torch.device(device).type == "cuda" and len(tasks) > 1:
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="evaluation-registration") as executor:
+                next_future = executor.submit(prepare, tasks[0])
+                for index, task in enumerate(progress):
+                    result = next_future.result()
+                    if index + 1 < len(tasks):
+                        next_future = executor.submit(prepare, tasks[index + 1])
+                    calculate_metrics(task, result)
+                    del result
+        else:
+            for task in progress:
+                result = prepare(task)
+                calculate_metrics(task, result)
+                del result
 
 
 def _clean_pipeline_memory() -> None:

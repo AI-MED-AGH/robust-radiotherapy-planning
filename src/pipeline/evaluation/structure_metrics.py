@@ -1,15 +1,13 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _is_planning_ct_path
+from src.pipeline.helpers.helpers import _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
@@ -350,62 +348,30 @@ def calculate_structure_similarity_metrics(
             if not has_cached_masks:
                 _save_warped_structure_masks(config, result.gen_path, generated_masks, warped_mask_cache)
 
-    # Define progress bar outside the loop since it is defined in different ways depending on device and number of tasks
-    pbar = tqdm(tasks, desc="Calculating generated vs real structure metrics")
+    def prepare_task(task: tuple[str, Path]) -> tuple[_StructureRegistrationResult, _PatientContext]:
+        patient_id, gen_path = task
+        # Only the preparation worker owns the context manager. The current
+        # metric callback holds its own context reference while the worker
+        # loads the next patient, so at most two patient contexts are retained.
+        ctx_mgr.retain_only({patient_id})
+        context = ctx_mgr.get(patient_id)
+        result = prepare_registration(gen_path, patient_id, context.planning_ct, config)
+        return result, context
 
-    number_of_tasks = len(tasks)
+    def calculate_task_metrics(
+        task: tuple[str, Path],
+        prepared: tuple[_StructureRegistrationResult, _PatientContext],
+    ) -> None:
+        result, context = prepared
+        append_metrics_for_registration(result, context)
 
-    if metric_device.type == "cuda" and number_of_tasks > 1:
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
-            # Prefetch registration for task 0
-            first_patient_id, first_gen_path = tasks[0]
-            next_future = executor.submit(
-                prepare_registration,
-                first_gen_path,
-                first_patient_id,
-                ctx_mgr.get(first_patient_id).planning_ct,
-                config,
-            )
-
-            for i, (patient_id, _) in enumerate(pbar):
-                is_not_last_task = i + 1 < number_of_tasks
-
-                active_pids = {patient_id}
-                if is_not_last_task:
-                    active_pids.add(tasks[i + 1][0])
-
-                ctx_mgr.retain_only(active_pids)
-                current_ctx = ctx_mgr.get(patient_id)
-
-                # Wait for registration result of current task
-                result = next_future.result()
-
-                # Schedule registration for next task (across CTs or patient boundaries)
-                if is_not_last_task:
-                    next_patient_id, next_gen_path = tasks[i + 1]
-                    next_ctx = ctx_mgr.get(next_patient_id)
-                    next_future = executor.submit(
-                        prepare_registration,
-                        next_gen_path,
-                        next_patient_id,
-                        next_ctx.planning_ct,
-                        config,
-                    )
-
-                # Process CUDA metrics while next registration runs concurrently on CPU thread
-                append_metrics_for_registration(result=result, current_ctx=current_ctx)
-
-    else:
-        for patient_id, gen_path in pbar:
-            ctx_mgr.retain_only({patient_id})
-            current_ctx = ctx_mgr.get(patient_id)
-            result = prepare_registration(
-                gen_path=gen_path,
-                patient_id=patient_id,
-                planning_ct=current_ctx.planning_ct,
-                config=config,
-            )
-            append_metrics_for_registration(result=result, current_ctx=current_ctx)
+    _run_evaluation_tasks(
+        tasks,
+        prepare_task,
+        calculate_task_metrics,
+        config.device,
+        "Calculating generated vs real structure metrics",
+    )
 
     for message in info_messages:
         logger.info(message)

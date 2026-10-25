@@ -6,10 +6,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _extract_patient_id, _is_planning_ct_path
+from src.pipeline.helpers.helpers import _extract_patient_id, _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_doses import (
     _collect_single_dose_per_patient,
     _contains_dose_files,
@@ -23,7 +22,6 @@ from src.pipeline.helpers.helpers_doses import (
     _metric_row,
     _normalised_image_key,
     _planning_masks_for_dose,
-    _prefetch_dose_data,
     _select_dose_for_anatomy,
     _warp_planning_masks_for_predicted_dose,
     _write_scenario_outputs,
@@ -526,17 +524,17 @@ def _evaluate_dose_on_generated_structures(
         return dose, masks, mask_source, warning
 
     rows: list[dict[str, Any]] = []
-    for task, result in tqdm(
-        _prefetch_dose_data(tasks, load_scenario, config.device),
-        total=len(tasks),
-        desc="Calculating generated-anatomy dose metrics",
-    ):
+
+    def calculate_scenario_metrics(
+        task: tuple[str, Path, Path, str],
+        result: tuple[torch.Tensor, dict[int, torch.Tensor] | None, str, str | None],
+    ) -> None:
         patient_id, generated_path, scenario_dose_path, selected_source = task
         dose, masks, mask_source, warning = result
         if warning is not None:
             logger.warning(warning)
         if masks is None:
-            continue
+            return
         _append_single_dose_rows(
             rows,
             dose,
@@ -551,6 +549,14 @@ def _evaluate_dose_on_generated_structures(
                 "structure_source": mask_source,
             },
         )
+
+    _run_evaluation_tasks(
+        tasks,
+        load_scenario,
+        calculate_scenario_metrics,
+        config.device,
+        "Calculating generated-anatomy dose metrics",
+    )
     return rows
 
 
@@ -978,12 +984,12 @@ def calculate_dose_evaluation_metrics(
             config=config,
         )
 
-    for task, result in tqdm(
-        _prefetch_dose_data(tasks, load_comparison, config.device),
-        total=len(tasks),
-        desc="Calculating dose metrics",
-    ):
+    def calculate_comparison_metrics(task: tuple[str, Path, Path], result: _DoseComparisonData) -> None:
         append_metrics_for_comparison(result, task[0])
+
+    _run_evaluation_tasks(
+        tasks, load_comparison, calculate_comparison_metrics, config.device, "Calculating dose metrics"
+    )
 
     for message in info_messages:
         logger.info(message)
