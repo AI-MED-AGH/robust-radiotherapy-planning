@@ -8,7 +8,7 @@ import torch
 from monai.metrics import compute_hausdorff_distance  # type: ignore[attr-defined]
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _is_planning_ct_path, _run_evaluation_tasks
+from src.pipeline.helpers.helpers import _clean_pipeline_memory, _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
@@ -319,6 +319,9 @@ def calculate_structure_similarity_metrics(
                         )
                         del ref_mask
                         continue
+
+                    # MONAI is prone to not clean memory properly when calculating Hausdorff
+                    _clean_pipeline_memory()
 
                     rows.append(
                         {
