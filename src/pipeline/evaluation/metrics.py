@@ -42,7 +42,7 @@ def evaluate_doses(
         metric settings, structure labels, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Generated-space structure masks produced during structure evaluation.
+        Index of mask-file paths produced during structure evaluation this run.
         Reusing this cache avoids repeating planning-to-generated registration.
     """
 
@@ -313,9 +313,9 @@ def evaluate_generated_cts(
     # which can also have substantial CPU and GPU memory footprints
     _clean_pipeline_memory()
 
-    # Structure evaluation returns generated-space masks keyed by CT path.
+    # Structure evaluation returns mask-file paths keyed by generated CT path.
     # Dose evaluation consumes the same cache later when enabled.
-    warped_mask_cache = {}
+    warped_mask_cache: WarpedStructureMaskCache = {}
     if config.use_structure_metrics:
         logger.info("Calculating generated-vs-real structure metrics")
         warped_mask_cache = calculate_structure_similarity_metrics(
