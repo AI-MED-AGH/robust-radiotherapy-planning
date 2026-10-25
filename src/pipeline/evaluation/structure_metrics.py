@@ -16,8 +16,10 @@ from src.pipeline.helpers.helpers_structures import (
     _calculate_structure_registration_result,
     _get_structure_label_transform,
     _label_to_binary_mask,
+    _load_warped_structure_masks,
     _PatientContext,
     _PatientContextManager,
+    _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
     _surface_distances,
@@ -158,15 +160,15 @@ def calculate_structure_similarity_metrics(
         registration settings, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Optional CPU cache filled with planning masks warped into each
-        generated CT space. Passing this cache lets downstream dose metrics
+        Current run's index of generated CT paths to mask files on disk.
+        Passing this index lets downstream dose metrics
         reuse the same generated-space target/OAR masks without repeating DVF
         registration or mask resampling.
 
     Returns
     -------
     warped_mask_cache : WarpedStructureMaskCache
-        CPU cache of warped generated-space masks keyed by generated CT path.
+        Paths to mask files written this run, keyed by generated CT path.
         Empty when no valid registrations are produced.
 
     Raises
@@ -255,9 +257,8 @@ def calculate_structure_similarity_metrics(
         planning_ct: torch.Tensor,
         config: MaisiTestingConfig,
     ) -> _StructureRegistrationResult:
-        # A complete run-local entry avoids both registration and mask warping.
-        cached_masks = warped_mask_cache.get(gen_path, {})
-        if all(label in cached_masks for label in config.structure_labels):
+        # Only completed writes are indexed; no disk lookup is needed here
+        if gen_path in warped_mask_cache:
             return _StructureRegistrationResult(gen_path=gen_path, gen_ct=None, transform=None)
         return _calculate_structure_registration_result(gen_path, patient_id, planning_ct, config)
 
@@ -284,8 +285,8 @@ def calculate_structure_similarity_metrics(
         if result.info_message is not None:
             info_messages.append(result.info_message)
 
-        cached_masks = warped_mask_cache.get(result.gen_path, {})
-        has_cached_masks = all(label in cached_masks for label in config.structure_labels)
+        cached_masks = _load_warped_structure_masks(config, result.gen_path, warped_mask_cache)
+        has_cached_masks = cached_masks is not None
         if not has_cached_masks and (result.gen_ct is None or result.transform is None):
             warnings.append(
                 f"Skipping structure metrics for {current_ctx.patient_id}:"
@@ -297,7 +298,7 @@ def calculate_structure_similarity_metrics(
         transform = result.transform
 
         with torch.inference_mode():
-            generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
+            generated_masks = cached_masks if cached_masks is not None else {}
             for label in config.structure_labels:
                 # Warp one planning label at a time.
                 # Only the current predicted/reference masks are moved to metric_device,
@@ -345,6 +346,9 @@ def calculate_structure_similarity_metrics(
                             "hd95": hd95_value,
                         }
                     )
+
+            if not has_cached_masks:
+                _save_warped_structure_masks(config, result.gen_path, generated_masks, warped_mask_cache)
 
     # Define progress bar outside the loop since it is defined in different ways depending on device and number of tasks
     pbar = tqdm(tasks, desc="Calculating generated vs real structure metrics")
