@@ -34,6 +34,35 @@ DemonsRegistrationAlgorithm = (
 
 
 @dataclass
+class _PatientContext:
+    """Preloaded CPU tensors and structure label maps for a single patient.
+
+    Attributes
+    ----------
+    patient_id : str
+        Identifier for the patient.
+
+    planning_structure_path : Path
+        Path to the planning structure label map file.
+
+    planning_ct : torch.Tensor
+        Planning CT tensor stored on CPU.
+
+    planning_masks : dict[int, torch.Tensor]
+        Binary planning structure masks keyed by label on CPU.
+
+    ref_label_maps : dict[Path, torch.Tensor]
+        Reference structure label maps keyed by reference CT path on CPU.
+    """
+
+    patient_id: str
+    planning_structure_path: Path
+    planning_ct: torch.Tensor
+    planning_masks: dict[int, torch.Tensor]
+    ref_label_maps: dict[Path, torch.Tensor]
+
+
+@dataclass
 class _StructureRegistrationResult:
     """
     Store the CPU registration work product for one generated CT.
@@ -68,6 +97,98 @@ class _StructureRegistrationResult:
     transform: Any | None
     info_message: str | None = None
     warning: str | None = None
+
+
+class _PatientContextManager:
+    """
+    Manages loading, caching, and memory eviction of patient CPU contexts.
+
+    Parameters
+    ----------
+    specs : dict[str, dict[str, Any]]
+        Pre-validated specifications containing file paths keyed by patient ID.
+
+    config : MaisiTestingConfig
+        Pipeline configuration containing structure labels and registration settings.
+
+    structure_transform : Any
+        Label-preserving transform applied when loading structure label maps.
+
+    cpu_device : torch.device
+        CPU torch device used for storing loaded contexts.
+    """
+
+    def __init__(
+        self,
+        specs: dict[str, dict[str, Any]],
+        config: MaisiTestingConfig,
+        structure_transform: Any,
+        cpu_device: torch.device,
+    ) -> None:
+        self.specs = specs
+        self.config = config
+        self.structure_transform = structure_transform
+        self.cpu_device = cpu_device
+        self._cache: dict[str, _PatientContext] = {}
+
+    def get(self, patient_id: str) -> _PatientContext:
+        """
+        Retrieve or lazily build and cache the CPU context for a patient.
+
+        Parameters
+        ----------
+        patient_id : str
+            Identifier of the patient context to load or retrieve.
+
+        Returns
+        -------
+        _PatientContext
+            Loaded CPU context containing planning CTs, masks, and reference maps.
+        """
+
+        if patient_id not in self._cache:
+            spec = self.specs[patient_id]
+            planning_ct_path = spec["planning_ct_path"]
+            planning_structure_path = spec["planning_structure_path"]
+            ref_paths = spec["ref_paths"]
+
+            planning_ct = _load_hu_tensor(planning_ct_path, config=self.config, device=self.cpu_device)
+            planning_label_map = _load_structure_label_map(planning_structure_path, self.structure_transform)
+            planning_masks = {
+                label: _label_to_binary_mask(planning_label_map, label) for label in self.config.structure_labels
+            }
+
+            ref_label_maps = {
+                ref_path: _load_structure_label_map(
+                    _structure_path_for_ct(ref_path, self.config),
+                    self.structure_transform,
+                )
+                for ref_path in ref_paths
+            }
+
+            self._cache[patient_id] = _PatientContext(
+                patient_id=patient_id,
+                planning_structure_path=planning_structure_path,
+                planning_ct=planning_ct,
+                planning_masks=planning_masks,
+                ref_label_maps=ref_label_maps,
+            )
+
+        return self._cache[patient_id]
+
+    def retain_only(self, active_patient_ids: set[str]) -> None:
+        """
+        Evict cached patient contexts not present in the active set.
+
+        Parameters
+        ----------
+        active_patient_ids : set[str]
+            Set of patient identifiers to keep in memory. All others are purged.
+        """
+
+        keys_to_remove = [pid for pid in self._cache if pid not in active_patient_ids]
+        for pid in keys_to_remove:
+            del self._cache[pid]
 
 
 def _get_structure_label_transform(config: MaisiTestingConfig) -> Compose:

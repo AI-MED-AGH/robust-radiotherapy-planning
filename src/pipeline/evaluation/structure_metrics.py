@@ -9,14 +9,15 @@ import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _is_planning_ct_path, _load_hu_tensor
+from src.pipeline.helpers.helpers import _is_planning_ct_path
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
     _get_structure_label_transform,
     _label_to_binary_mask,
-    _load_structure_label_map,
+    _PatientContext,
+    _PatientContextManager,
     _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
@@ -199,7 +200,11 @@ def calculate_structure_similarity_metrics(
     # Build the label-preserving transform once for all structure files.
     structure_transform = _get_structure_label_transform(config)
 
-    for patient_id, gen_paths in tqdm(generated.items(), desc="Calculating generated vs real structure metrics"):
+    # Gather valid patient specs and task list using simple (patient_id, gen_path) tuples
+    patient_specs: dict[str, dict[str, Any]] = {}
+    tasks: list[tuple[str, Path]] = []
+
+    for patient_id, gen_paths in generated.items():
         all_ref_paths = originals.get(patient_id, [])
         ref_paths = [path for path in all_ref_paths if not _is_planning_ct_path(path)]
         planning_paths = [path for path in all_ref_paths if _is_planning_ct_path(path)]
@@ -215,166 +220,176 @@ def calculate_structure_similarity_metrics(
             warnings.append(f"Skipping structure metrics for {patient_id}: missing {planning_structure_path}")
             continue
 
-        # Registration and mask warping go through SimpleITK.
-        # Keep CT volumes on CPU instead of caching patient CTs in VRAM.
-        planning_ct = _load_hu_tensor(planning_ct_path, config=config, device=cpu_device)
-        planning_label_map = _load_structure_label_map(planning_structure_path, structure_transform)
-        planning_masks = {label: _label_to_binary_mask(planning_label_map, label) for label in config.structure_labels}
-
-        ref_label_maps: dict[Path, torch.Tensor] = {}
+        valid_ref_paths: list[Path] = []
         for ref_path in ref_paths:
             ref_structure_path = _structure_path_for_ct(ref_path, config)
             if not ref_structure_path.exists():
                 warnings.append(f"Skipping missing reference structure for {patient_id}: {ref_structure_path}")
                 continue
+            valid_ref_paths.append(ref_path)
 
-            ref_label_maps[ref_path] = _load_structure_label_map(ref_structure_path, structure_transform)
-
-        if len(ref_label_maps) == 0:
+        if len(valid_ref_paths) == 0:
             continue
 
-        def append_metrics_for_registration(
-            result: _StructureRegistrationResult,
-            current_patient_id: str,
-            current_planning_structure_path: Path,
-            current_planning_masks: dict[int, torch.Tensor],
-            current_ref_label_maps: dict[Path, torch.Tensor],
-        ) -> None:
-            """
-            Warp registered planning masks and append metric rows.
+        patient_specs[patient_id] = {
+            "planning_ct_path": planning_ct_path,
+            "planning_structure_path": planning_structure_path,
+            "ref_paths": valid_ref_paths,
+        }
 
-            This consumes a completed CPU registration result. The generated
-            CT and transform stay on CPU for SimpleITK mask warping, while
-            only the current predicted and reference masks are moved to the
-            configured metric device.
+        for gen_path in gen_paths:
+            tasks.append((patient_id, gen_path))
 
-            Parameters
-            ----------
-            result : _StructureRegistrationResult
-                Completed registration result for one generated CT.
+    if len(tasks) == 0:
+        for message in warnings:
+            logger.warning(message)
+        logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
+        return warped_mask_cache
 
-            current_patient_id : str
-                Patient identifier written to output rows and warnings.
+    ctx_mgr = _PatientContextManager(
+        specs=patient_specs,
+        config=config,
+        structure_transform=structure_transform,
+        cpu_device=cpu_device,
+    )
 
-            current_planning_structure_path : Path
-                Path to the planning structure label map written to output
-                rows.
+    def append_metrics_for_registration(
+        result: _StructureRegistrationResult,
+        current_ctx: _PatientContext,
+    ) -> None:
+        """
+        Warp registered planning masks and append metric rows.
 
-            current_planning_masks : dict[int, torch.Tensor]
-                Planning CT masks keyed by structure label.
+        Parameters
+        ----------
+        result : _StructureRegistrationResult
+            Completed registration result for one generated CT.
 
-            current_ref_label_maps : dict[Path, torch.Tensor]
-                Reference structure label maps keyed by reference CT path.
-            """
+        current_ctx : _PatientContext
+            Loaded patient CPU context containing planning masks and reference maps.
+        """
 
-            if result.warning is not None:
-                warnings.append(result.warning)
-                return
+        if result.warning is not None:
+            warnings.append(result.warning)
+            return
 
-            if result.info_message is not None:
-                info_messages.append(result.info_message)
+        if result.info_message is not None:
+            info_messages.append(result.info_message)
 
-            if result.gen_ct is None or result.transform is None:
-                warnings.append(
-                    f"Skipping structure metrics for {current_patient_id}: registration failed for {result.gen_path}"
-                )
-                return
+        if result.gen_ct is None or result.transform is None:
+            warnings.append(
+                f"Skipping structure metrics for {current_ctx.patient_id}:"
+                + f" registration failed for {result.gen_path}"
+            )
+            return
 
-            gen_ct = result.gen_ct
-            transform = result.transform
+        gen_ct = result.gen_ct
+        transform = result.transform
 
-            with torch.inference_mode():
-                generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
-                for label in config.structure_labels:
-                    # Warp one planning label at a time.
-                    # Only the current predicted/reference masks are moved to metric_device,
-                    # so CUDA sees small boolean masks rather than full CT caches.
-                    pred_mask_cpu = generated_masks.get(label)
-                    if pred_mask_cpu is None:
-                        pred_mask_cpu = _warp_planning_mask_to_generated_ct(
-                            planning_mask=current_planning_masks[label],
-                            generated_ct=gen_ct,
-                            transform=transform,
-                            config=config,
+        with torch.inference_mode():
+            generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
+            for label in config.structure_labels:
+                # Warp one planning label at a time.
+                # Only the current predicted/reference masks are moved to metric_device,
+                # so CUDA sees small boolean masks rather than full CT caches.
+                pred_mask_cpu = generated_masks.get(label)
+                if pred_mask_cpu is None:
+                    pred_mask_cpu = _warp_planning_mask_to_generated_ct(
+                        planning_mask=current_ctx.planning_masks[label],
+                        generated_ct=gen_ct,
+                        transform=transform,
+                        config=config,
+                    )
+                    generated_masks[label] = pred_mask_cpu
+
+                pred_mask = pred_mask_cpu.to(metric_device)
+
+                for ref_path, ref_label_map in current_ctx.ref_label_maps.items():
+                    ref_structure_path = _structure_path_for_ct(ref_path, config)
+                    ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
+                    try:
+                        dice = dice_coefficient(pred_mask, ref_mask)
+                        hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
+                    except ValueError as exc:
+                        warnings.append(
+                            f"Skipping invalid structure masks for {current_ctx.patient_id}, label {label}: {exc}"
                         )
-                        generated_masks[label] = pred_mask_cpu
+                        del ref_mask
+                        continue
 
-                    pred_mask = pred_mask_cpu.to(metric_device)
-
-                    for ref_path, ref_label_map in current_ref_label_maps.items():
-                        ref_structure_path = _structure_path_for_ct(ref_path, config)
-                        ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
-                        try:
-                            dice = dice_coefficient(pred_mask, ref_mask)
-                            hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
-                        except ValueError as exc:
-                            warnings.append(
-                                f"Skipping invalid structure masks for {current_patient_id}, label {label}: {exc}"
-                            )
-                            del ref_mask
-                            continue
-
-                        rows.append(
-                            {
-                                "patient_id": current_patient_id,
-                                "comparison_type": "generated_structure_vs_real_structure",
-                                "generated_path": str(result.gen_path),
-                                "reference_path": str(ref_path),
-                                "planning_structure_path": str(current_planning_structure_path),
-                                "reference_structure_path": str(ref_structure_path),
-                                "structure_label": label,
-                                "dice": dice,
-                                "hd": hd,
-                                "hd95": hd95_value,
-                            }
-                        )
-
-                _save_warped_structure_masks(config, result.gen_path, generated_masks)
-
-        if metric_device.type == "cuda" and len(gen_paths) > 1:
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
-                next_future = executor.submit(
-                    _calculate_structure_registration_result,
-                    gen_paths[0],
-                    patient_id,
-                    planning_ct,
-                    config,
-                )
-
-                for next_index in range(1, len(gen_paths) + 1):
-                    result = next_future.result()
-                    if next_index < len(gen_paths):
-                        next_future = executor.submit(
-                            _calculate_structure_registration_result,
-                            gen_paths[next_index],
-                            patient_id,
-                            planning_ct,
-                            config,
-                        )
-
-                    append_metrics_for_registration(
-                        result=result,
-                        current_patient_id=patient_id,
-                        current_planning_structure_path=planning_structure_path,
-                        current_planning_masks=planning_masks,
-                        current_ref_label_maps=ref_label_maps,
+                    rows.append(
+                        {
+                            "patient_id": current_ctx.patient_id,
+                            "comparison_type": "generated_structure_vs_real_structure",
+                            "generated_path": str(result.gen_path),
+                            "reference_path": str(ref_path),
+                            "planning_structure_path": str(current_ctx.planning_structure_path),
+                            "reference_structure_path": str(ref_structure_path),
+                            "structure_label": label,
+                            "dice": dice,
+                            "hd": hd,
+                            "hd95": hd95_value,
+                        }
                     )
 
-        else:
-            for gen_path in gen_paths:
-                result = _calculate_structure_registration_result(
-                    gen_path=gen_path,
-                    patient_id=patient_id,
-                    planning_ct=planning_ct,
-                    config=config,
-                )
-                append_metrics_for_registration(
-                    result=result,
-                    current_patient_id=patient_id,
-                    current_planning_structure_path=planning_structure_path,
-                    current_planning_masks=planning_masks,
-                    current_ref_label_maps=ref_label_maps,
-                )
+            _save_warped_structure_masks(config, result.gen_path, generated_masks)
+
+    # Define progress bar outside the loop since it is defined in different ways depending on device and number of tasks
+    pbar = tqdm(tasks, desc="Calculating generated vs real structure metrics")
+
+    number_of_tasks = len(tasks)
+
+    if metric_device.type == "cuda" and number_of_tasks > 1:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
+            # Prefetch registration for task 0
+            first_patient_id, first_gen_path = tasks[0]
+            next_future = executor.submit(
+                _calculate_structure_registration_result,
+                first_gen_path,
+                first_patient_id,
+                ctx_mgr.get(first_patient_id).planning_ct,
+                config,
+            )
+
+            for i, (patient_id, _) in enumerate(pbar):
+                is_not_last_task = i + 1 < number_of_tasks
+
+                active_pids = {patient_id}
+                if is_not_last_task:
+                    active_pids.add(tasks[i + 1][0])
+
+                ctx_mgr.retain_only(active_pids)
+                current_ctx = ctx_mgr.get(patient_id)
+
+                # Wait for registration result of current task
+                result = next_future.result()
+
+                # Schedule registration for next task (across CTs or patient boundaries)
+                if is_not_last_task:
+                    next_patient_id, next_gen_path = tasks[i + 1]
+                    next_ctx = ctx_mgr.get(next_patient_id)
+                    next_future = executor.submit(
+                        _calculate_structure_registration_result,
+                        next_gen_path,
+                        next_patient_id,
+                        next_ctx.planning_ct,
+                        config,
+                    )
+
+                # Process CUDA metrics while next registration runs concurrently on CPU thread
+                append_metrics_for_registration(result=result, current_ctx=current_ctx)
+
+    else:
+        for patient_id, gen_path in pbar:
+            ctx_mgr.retain_only({patient_id})
+            current_ctx = ctx_mgr.get(patient_id)
+            result = _calculate_structure_registration_result(
+                gen_path=gen_path,
+                patient_id=patient_id,
+                planning_ct=current_ctx.planning_ct,
+                config=config,
+            )
+            append_metrics_for_registration(result=result, current_ctx=current_ctx)
 
     for message in info_messages:
         logger.info(message)
