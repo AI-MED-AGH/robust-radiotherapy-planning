@@ -223,6 +223,9 @@ class MaisiTestingConfig:
         Directory containing model-predicted dose distributions to compare
         against reference doses.
 
+    warped_structure_cache_dir : Path
+        Directory for mask files indexed only during the current evaluation run.
+
     logs_dir : Path
         Directory containing pipeline logs.
 
@@ -268,6 +271,7 @@ class MaisiTestingConfig:
     latent_ct_dir: Path = field(init=False)
     generated_ct_dir: Path = field(init=False)
     predicted_dose_dir: Path = field(init=False)
+    warped_structure_cache_dir: Path = field(init=False)
     metrics_dir: Path = field(init=False)
     logs_dir: Path = field(init=False)
 
@@ -394,7 +398,7 @@ class MaisiTestingConfig:
             Supported keys are ``ct_root``, ``structures_root``, ``dose_root``,
             ``data_dict_path``, ``processed_ct_dir``, ``latent_ct_dir``,
             ``generated_ct_dir``, ``predicted_dose_dir``,
-            ``metrics_dir``, ``logs_dir``,
+            ``warped_structure_cache_dir``, ``metrics_dir``, ``logs_dir``,
             ``vae_weight_path``, and ``rflow_weight_path``.
             Values are assigned exactly as supplied, without adding a root
             or evaluation split. None or an empty mapping uses all defaults.
@@ -429,6 +433,7 @@ class MaisiTestingConfig:
             "latent_ct_dir": "latents",
             "generated_ct_dir": "generated_ct",
             "predicted_dose_dir": "predicted_dose",
+            "warped_structure_cache_dir": "warped_structure_masks",
             "metrics_dir": "metrics",
         }
         for attribute, directory in split_directories.items():
@@ -449,7 +454,7 @@ class MaisiTestingConfig:
 
         Creates ``output_root``, ``processed_ct_dir``, ``latent_ct_dir``,
         ``generated_ct_dir``, ``predicted_dose_dir``,
-        ``metrics_dir``, and ``logs_dir``.
+        ``warped_structure_cache_dir``, ``metrics_dir``, and ``logs_dir``.
         Uses the resolved instance paths, including explicit path overrides.
 
         Raises
@@ -472,6 +477,7 @@ class MaisiTestingConfig:
         self.latent_ct_dir.mkdir(parents=True, exist_ok=True)
         self.generated_ct_dir.mkdir(parents=True, exist_ok=True)
         self.predicted_dose_dir.mkdir(parents=True, exist_ok=True)
+        self.warped_structure_cache_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 

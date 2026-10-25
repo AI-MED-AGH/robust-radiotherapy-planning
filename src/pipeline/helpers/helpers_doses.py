@@ -32,6 +32,8 @@ from src.pipeline.helpers.helpers_structures import (
     _calculate_structure_registration_result,
     _label_to_binary_mask,
     _load_structure_label_map,
+    _load_warped_structure_masks,
+    _save_warped_structure_masks,
     _structure_path_for_ct,
     _warp_planning_mask_to_generated_ct,
 )
@@ -48,12 +50,29 @@ def _prefetch_dose_data(
     load: Callable[[_Task], _Result],
     device: str,
 ) -> Iterator[tuple[_Task, _Result]]:
-    """Overlap one CPU load/registration with CUDA metrics, even across patients.
-
-    Only one worker mutates loader caches. At most one future is pending;
-    CPU evaluation and single-task runs stay sequential. Results retain input
-    order, and worker errors propagate to the caller.
     """
+    Yield dose data in input order, prefetching the next task for CUDA evaluation.
+
+    Parameters
+    ----------
+    tasks : Sequence[_Task]
+        Ordered loading or registration tasks, which may span multiple patients.
+    load : Callable[[_Task], _Result]
+        Load or register CPU data for one task and return its result. Calls are
+        serialized so loader caches are not mutated by concurrent loader calls.
+    device : str
+        Metric evaluation device accepted by ``torch.device``, such as ``cpu``
+        or ``cuda:0``. Prefetching is enabled only for CUDA with at least two
+        tasks; otherwise, loading runs sequentially in the caller's thread.
+
+    Yields
+    ------
+    task : _Task
+        Next task in the input sequence.
+    result : _Result
+        Data returned by ``load(task)``, yielded together with the task as a tuple.
+    """
+
     if torch.device(device).type != "cuda" or len(tasks) < 2:
         for task in tasks:
             yield task, load(task)
@@ -718,7 +737,7 @@ def _warp_planning_masks_for_predicted_dose(
         CPU cache of planning structure label maps keyed by patient ID.
 
     generated_mask_cache : WarpedStructureMaskCache
-        CPU cache of warped planning masks keyed by generated CT path.
+        Current run's index of generated CT paths to mask files on disk.
 
     config : MaisiTestingConfig
         Pipeline configuration containing CT, structure, and registration
@@ -746,10 +765,9 @@ def _warp_planning_masks_for_predicted_dose(
             f"Using reference-space dose masks for {pred_path}: no matching generated CT found",
         )
 
-    # Check the current run's cache before touching disk or running deformable
-    # registration, which is the most expensive path through this helper
-    cached_masks = generated_mask_cache.get(gen_ct_path, {})
-    if all(label in cached_masks for label in config.structure_labels):
+    # Load only a file registered by this run. An index miss never searches disk.
+    cached_masks = _load_warped_structure_masks(config, gen_ct_path, generated_mask_cache)
+    if cached_masks is not None:
         return cached_masks, "warped_planning_structure_to_generated_ct", None, None
 
     planning_ct_path = _planning_ct_path_for_patient(patient_id, config)
@@ -821,8 +839,8 @@ def _warp_planning_masks_for_predicted_dose(
             config=config,
         )
 
-    # Reuse successful warps only for later comparisons in this run.
-    generated_mask_cache[gen_ct_path] = warped_masks
+    # Reuse successful warps only for later comparisons in this run
+    _save_warped_structure_masks(config, gen_ct_path, warped_masks, generated_mask_cache)
 
     return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
 
@@ -886,7 +904,7 @@ def _load_dose_comparison_data(
         CPU cache of planning structure label maps keyed by patient ID.
 
     generated_mask_cache : WarpedStructureMaskCache
-        CPU cache of DVF-warped generated-space masks keyed by generated CT.
+        Current run's index of generated CT paths to mask files on disk.
 
     config : MaisiTestingConfig
         Pipeline configuration containing paths and preprocessing settings.
@@ -899,7 +917,7 @@ def _load_dose_comparison_data(
     """
 
     # Predicted doses are unique per pair, whereas a reference is commonly
-    # reused by several generated scenarios and therefore benefits from caching
+    # reused by several generated scenarios and therefore benefits from caching.
     pred_dose = _load_dose_distribution(pred_path, dose_transform)
     ref_dose = reference_dose_cache.get(ref_path)
     if ref_dose is None:

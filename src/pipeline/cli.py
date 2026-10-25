@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
         - dose_vx_thresholds
         - generated_ct_dir
         - predicted_dose_dir
+        - warped_structure_cache_dir
         - dose_root
         - processed_ct_dir
         - metrics_dir
@@ -194,6 +195,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--warped-structure-cache-dir",
+        type=Path,
+        default=None,
+        help="Directory for mask files reused only within the current run",
+    )
+
+    parser.add_argument(
         "--metrics-dir",
         type=Path,
         default=None,
@@ -271,6 +279,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     for attribute in (
         "generated_ct_dir",
         "predicted_dose_dir",
+        "warped_structure_cache_dir",
         "dose_root",
         "processed_ct_dir",
         "metrics_dir",
