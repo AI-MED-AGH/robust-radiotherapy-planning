@@ -380,7 +380,7 @@ def calculate_structure_similarity_metrics(
                 append_metrics_for_registration(result=result, current_ctx=current_ctx)
 
     else:
-        for patient_id, gen_path in tasks:
+        for patient_id, gen_path in pbar:
             ctx_mgr.retain_only({patient_id})
             current_ctx = ctx_mgr.get(patient_id)
             result = _calculate_structure_registration_result(
