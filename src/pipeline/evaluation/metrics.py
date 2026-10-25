@@ -56,6 +56,11 @@ def evaluate_doses(
         logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
         return
 
+    # A standalone dose-evaluate run also shares masks between its workflows.
+    # Create a fresh cache per invocation; never recover masks from old outputs.
+    if warped_mask_cache is None:
+        warped_mask_cache = {}
+
     if config.use_base_dose_smoke_test:
         logger.info("Calculating fraction-1 base-dose smoke-test metrics")
         evaluate_base_dose_smoke_test(config, warped_mask_cache=warped_mask_cache)

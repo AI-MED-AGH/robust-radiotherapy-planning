@@ -18,7 +18,6 @@ from src.pipeline.helpers.helpers_structures import (
     _label_to_binary_mask,
     _PatientContext,
     _PatientContextManager,
-    _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
     _surface_distances,
@@ -143,9 +142,6 @@ def calculate_structure_similarity_metrics(
         Per-comparison, per-label structure metrics.
     - generated_vs_real_structure_summary.csv
         Patient- and label-level summary statistics.
-    - warped structure mask cache files
-        CPU `.pt` files under `config.warped_structure_cache_dir`, keyed by
-        generated CT, for reuse by dose metrics in later independent runs.
 
     Parameters
     ----------
@@ -253,6 +249,18 @@ def calculate_structure_similarity_metrics(
         cpu_device=cpu_device,
     )
 
+    def prepare_registration(
+        gen_path: Path,
+        patient_id: str,
+        planning_ct: torch.Tensor,
+        config: MaisiTestingConfig,
+    ) -> _StructureRegistrationResult:
+        # A complete run-local entry avoids both registration and mask warping.
+        cached_masks = warped_mask_cache.get(gen_path, {})
+        if all(label in cached_masks for label in config.structure_labels):
+            return _StructureRegistrationResult(gen_path=gen_path, gen_ct=None, transform=None)
+        return _calculate_structure_registration_result(gen_path, patient_id, planning_ct, config)
+
     def append_metrics_for_registration(
         result: _StructureRegistrationResult,
         current_ctx: _PatientContext,
@@ -276,7 +284,9 @@ def calculate_structure_similarity_metrics(
         if result.info_message is not None:
             info_messages.append(result.info_message)
 
-        if result.gen_ct is None or result.transform is None:
+        cached_masks = warped_mask_cache.get(result.gen_path, {})
+        has_cached_masks = all(label in cached_masks for label in config.structure_labels)
+        if not has_cached_masks and (result.gen_ct is None or result.transform is None):
             warnings.append(
                 f"Skipping structure metrics for {current_ctx.patient_id}:"
                 + f" registration failed for {result.gen_path}"
@@ -294,6 +304,10 @@ def calculate_structure_similarity_metrics(
                 # so CUDA sees small boolean masks rather than full CT caches.
                 pred_mask_cpu = generated_masks.get(label)
                 if pred_mask_cpu is None:
+                    if gen_ct is None or transform is None:
+                        raise RuntimeError(
+                            f"Cannot warp structure label {label} for {result.gen_path}: missing registration data"
+                        )
                     pred_mask_cpu = _warp_planning_mask_to_generated_ct(
                         planning_mask=current_ctx.planning_masks[label],
                         generated_ct=gen_ct,
@@ -332,8 +346,6 @@ def calculate_structure_similarity_metrics(
                         }
                     )
 
-            _save_warped_structure_masks(config, result.gen_path, generated_masks)
-
     # Define progress bar outside the loop since it is defined in different ways depending on device and number of tasks
     pbar = tqdm(tasks, desc="Calculating generated vs real structure metrics")
 
@@ -344,7 +356,7 @@ def calculate_structure_similarity_metrics(
             # Prefetch registration for task 0
             first_patient_id, first_gen_path = tasks[0]
             next_future = executor.submit(
-                _calculate_structure_registration_result,
+                prepare_registration,
                 first_gen_path,
                 first_patient_id,
                 ctx_mgr.get(first_patient_id).planning_ct,
@@ -369,7 +381,7 @@ def calculate_structure_similarity_metrics(
                     next_patient_id, next_gen_path = tasks[i + 1]
                     next_ctx = ctx_mgr.get(next_patient_id)
                     next_future = executor.submit(
-                        _calculate_structure_registration_result,
+                        prepare_registration,
                         next_gen_path,
                         next_patient_id,
                         next_ctx.planning_ct,
@@ -383,7 +395,7 @@ def calculate_structure_similarity_metrics(
         for patient_id, gen_path in pbar:
             ctx_mgr.retain_only({patient_id})
             current_ctx = ctx_mgr.get(patient_id)
-            result = _calculate_structure_registration_result(
+            result = prepare_registration(
                 gen_path=gen_path,
                 patient_id=patient_id,
                 planning_ct=current_ctx.planning_ct,

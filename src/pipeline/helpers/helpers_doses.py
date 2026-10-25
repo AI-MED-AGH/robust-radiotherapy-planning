@@ -1,8 +1,10 @@
 import glob
 import logging
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -30,13 +32,41 @@ from src.pipeline.helpers.helpers_structures import (
     _calculate_structure_registration_result,
     _label_to_binary_mask,
     _load_structure_label_map,
-    _load_warped_structure_masks,
-    _save_warped_structure_masks,
     _structure_path_for_ct,
     _warp_planning_mask_to_generated_ct,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_Task = TypeVar("_Task")
+_Result = TypeVar("_Result")
+
+
+def _prefetch_dose_data(
+    tasks: Sequence[_Task],
+    load: Callable[[_Task], _Result],
+    device: str,
+) -> Iterator[tuple[_Task, _Result]]:
+    """Overlap one CPU load/registration with CUDA metrics, even across patients.
+
+    Only one worker mutates loader caches. At most one future is pending;
+    CPU evaluation and single-task runs stay sequential. Results retain input
+    order, and worker errors propagate to the caller.
+    """
+    if torch.device(device).type != "cuda" or len(tasks) < 2:
+        for task in tasks:
+            yield task, load(task)
+        return
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dose-registration") as executor:
+        future = executor.submit(load, tasks[0])
+        for index, task in enumerate(tasks):
+            result = future.result()
+            if index + 1 < len(tasks):
+                future = executor.submit(load, tasks[index + 1])
+            yield task, result
+            del result
 
 
 @dataclass
@@ -718,14 +748,9 @@ def _warp_planning_masks_for_predicted_dose(
 
     # Check the current run's cache before touching disk or running deformable
     # registration, which is the most expensive path through this helper
-    cached_masks = generated_mask_cache.get(gen_ct_path)
-    if cached_masks is not None:
+    cached_masks = generated_mask_cache.get(gen_ct_path, {})
+    if all(label in cached_masks for label in config.structure_labels):
         return cached_masks, "warped_planning_structure_to_generated_ct", None, None
-
-    persisted_masks = _load_warped_structure_masks(config, gen_ct_path)
-    if persisted_masks is not None:
-        generated_mask_cache[gen_ct_path] = persisted_masks
-        return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
 
     planning_ct_path = _planning_ct_path_for_patient(patient_id, config)
     if planning_ct_path is None:
@@ -796,10 +821,8 @@ def _warp_planning_masks_for_predicted_dose(
             config=config,
         )
 
-    # Persist successful warps so both later dose comparisons and future runs
-    # can bypass registration for this generated anatomy
+    # Reuse successful warps only for later comparisons in this run.
     generated_mask_cache[gen_ct_path] = warped_masks
-    _save_warped_structure_masks(config, gen_ct_path, warped_masks)
 
     return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
 

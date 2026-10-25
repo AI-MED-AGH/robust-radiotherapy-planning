@@ -23,6 +23,7 @@ from src.pipeline.helpers.helpers_doses import (
     _metric_row,
     _normalised_image_key,
     _planning_masks_for_dose,
+    _prefetch_dose_data,
     _select_dose_for_anatomy,
     _warp_planning_masks_for_predicted_dose,
     _write_scenario_outputs,
@@ -325,6 +326,8 @@ def _append_single_dose_rows(
         If a configured Dx volume percentage is outside ``[0, 100]``.
     """
 
+    # Keep only the current dose on the metric device; masks move one at a time.
+    dose = dose.to(config.device)
     for label, mask in masks.items():
         # A shape mismatch makes both masking and clinical interpretation
         # invalid for this structure, but should not discard other scenarios
@@ -336,6 +339,7 @@ def _append_single_dose_rows(
                 tuple(mask.shape),
             )
             continue
+        mask = mask.to(config.device)
         for metric, value in _clinical_metric_values(dose, mask, config).items():
             rows.append({**metadata, "structure_label": label, "metric": metric, "value": value})
 
@@ -473,53 +477,80 @@ def _evaluate_dose_on_generated_structures(
     for generated_path in generated_lookup.values():
         generated_by_patient.setdefault(_extract_patient_id(generated_path), []).append(generated_path)
 
-    rows: list[dict[str, Any]] = []
+    # Flatten scenarios so prefetch continues across patient boundaries.
+    tasks: list[tuple[str, Path, Path, str]] = []
     for patient_id, generated_paths in generated_by_patient.items():
-        patient_dose = dose_groups.get(patient_id)
-        planning_ct_cache: dict[str, torch.Tensor] = {}
-        planning_label_map_cache: dict[str, torch.Tensor] = {}
+        scenario_dose_path, selected_source = _select_dose_for_anatomy(
+            patient_dose=dose_groups.get(patient_id),
+            clinical_path=reference_groups.get(patient_id),
+            dose_source=dose_source,
+            force_clinical=dose_source == "base_fraction_1",
+        )
+        if scenario_dose_path is None:
+            logger.warning("Skipping %s: no patient-level dose found", patient_id)
+            continue
         for generated_path in sorted(generated_paths):
-            # Use the same patient-dose/clinical-fallback policy for generated
-            # and observed real anatomies.
-            scenario_dose_path, selected_source = _select_dose_for_anatomy(
-                patient_dose=patient_dose,
-                clinical_path=reference_groups.get(patient_id),
-                dose_source=dose_source,
-                force_clinical=dose_source == "base_fraction_1",
-            )
-            if scenario_dose_path is None:
-                logger.warning("Skipping %s: no patient-level dose found", generated_path)
-                continue
+            tasks.append((patient_id, generated_path, scenario_dose_path, selected_source))
+
+    planning_ct_cache: dict[str, torch.Tensor] = {}
+    planning_label_map_cache: dict[str, torch.Tensor] = {}
+    dose_cache: dict[Path, torch.Tensor] = {}
+    active_patient: str | None = None
+
+    def load_scenario(
+        task: tuple[str, Path, Path, str],
+    ) -> tuple[torch.Tensor, dict[int, torch.Tensor] | None, str, str | None]:
+        nonlocal active_patient
+        patient_id, generated_path, scenario_dose_path, _ = task
+        # Only the loader worker owns these patient-scoped CPU caches.
+        if patient_id != active_patient:
+            planning_ct_cache.clear()
+            planning_label_map_cache.clear()
+            dose_cache.clear()
+            active_patient = patient_id
+        dose = dose_cache.get(scenario_dose_path)
+        if dose is None:
             dose = _load_dose_distribution(scenario_dose_path, dose_transform)
-            masks, mask_source, _, warning = _warp_planning_masks_for_predicted_dose(
-                pred_path=generated_path,
-                pred_dose=dose,
-                patient_id=patient_id,
-                generated_ct_lookup=generated_lookup,
-                structure_transform=structure_transform,
-                planning_ct_cache=planning_ct_cache,
-                planning_label_map_cache=planning_label_map_cache,
-                generated_mask_cache=warped_mask_cache,
-                config=config,
-            )
-            if warning is not None:
-                logger.warning(warning)
-            if masks is None:
-                continue
-            _append_single_dose_rows(
-                rows,
-                dose,
-                masks,
-                config,
-                {
-                    "dose_source": selected_source,
-                    "patient_id": patient_id,
-                    "scenario_id": _normalised_image_key(generated_path),
-                    "scenario_type": "generated_anatomy",
-                    "dose_path": str(scenario_dose_path),
-                    "structure_source": mask_source,
-                },
-            )
+            dose_cache[scenario_dose_path] = dose
+        masks, mask_source, _, warning = _warp_planning_masks_for_predicted_dose(
+            pred_path=generated_path,
+            pred_dose=dose,
+            patient_id=patient_id,
+            generated_ct_lookup=generated_lookup,
+            structure_transform=structure_transform,
+            planning_ct_cache=planning_ct_cache,
+            planning_label_map_cache=planning_label_map_cache,
+            generated_mask_cache=warped_mask_cache,
+            config=config,
+        )
+        return dose, masks, mask_source, warning
+
+    rows: list[dict[str, Any]] = []
+    for task, result in tqdm(
+        _prefetch_dose_data(tasks, load_scenario, config.device),
+        total=len(tasks),
+        desc="Calculating generated-anatomy dose metrics",
+    ):
+        patient_id, generated_path, scenario_dose_path, selected_source = task
+        dose, masks, mask_source, warning = result
+        if warning is not None:
+            logger.warning(warning)
+        if masks is None:
+            continue
+        _append_single_dose_rows(
+            rows,
+            dose,
+            masks,
+            config,
+            {
+                "dose_source": selected_source,
+                "patient_id": patient_id,
+                "scenario_id": _normalised_image_key(generated_path),
+                "scenario_type": "generated_anatomy",
+                "dose_path": str(scenario_dose_path),
+                "structure_source": mask_source,
+            },
+        )
     return rows
 
 
@@ -913,12 +944,16 @@ def calculate_dose_evaluation_metrics(
                         }
                     )
 
-    for patient_id, pred_path in tqdm(predicted.items(), desc="Calculating dose metrics"):
+    tasks: list[tuple[str, Path, Path]] = []
+    for patient_id, pred_path in predicted.items():
         ref_path = references.get(patient_id)
         if ref_path is None:
             warnings.append(f"Skipping dose metrics for {patient_id}: no reference dose found")
             continue
+        tasks.append((patient_id, pred_path, ref_path))
 
+    def load_comparison(task: tuple[str, Path, Path]) -> _DoseComparisonData:
+        patient_id, pred_path, ref_path = task
         # Keep loader inputs patient-scoped. The shared generated-mask cache can
         # still reuse structure registration performed by an earlier workflow.
         reference_dose_cache: dict[Path, torch.Tensor] = {}
@@ -927,7 +962,7 @@ def calculate_dose_evaluation_metrics(
         planning_label_map_cache: dict[str, torch.Tensor] = {}
         generated_mask_cache: WarpedStructureMaskCache = shared_generated_mask_cache
 
-        result = _load_dose_comparison_data(
+        return _load_dose_comparison_data(
             pred_path=pred_path,
             ref_path=ref_path,
             patient_id=patient_id,
@@ -941,7 +976,13 @@ def calculate_dose_evaluation_metrics(
             generated_mask_cache=generated_mask_cache,
             config=config,
         )
-        append_metrics_for_comparison(result, patient_id)
+
+    for task, result in tqdm(
+        _prefetch_dose_data(tasks, load_comparison, config.device),
+        total=len(tasks),
+        desc="Calculating dose metrics",
+    ):
+        append_metrics_for_comparison(result, task[0])
 
     for message in info_messages:
         logger.info(message)
