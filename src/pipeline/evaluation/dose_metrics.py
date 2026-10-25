@@ -454,7 +454,7 @@ def _evaluate_dose_on_generated_structures(
         the clinical fraction-1 dose the patient-level fallback.
 
     warped_mask_cache : WarpedStructureMaskCache
-        Reusable generated-space masks keyed by generated CT path.
+        Current run's mask-file paths keyed by generated CT path.
 
     Returns
     -------
@@ -643,7 +643,7 @@ def evaluate_scenario_robustness(
         generated CT paths, structure labels, and clinical metric settings.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Reusable generated-space masks keyed by generated CT path. If omitted,
+        Current run's mask-file paths keyed by generated CT path. If omitted,
         a new cache is created for this evaluation.
 
     Raises
@@ -688,7 +688,7 @@ def evaluate_base_dose_smoke_test(
         paths, structure labels, clinical metric settings, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Reusable generated-space masks keyed by generated CT path. If omitted,
+        Current run's mask-file paths keyed by generated CT path. If omitted,
         a new cache is created for this evaluation.
 
     Raises
@@ -757,7 +757,8 @@ def calculate_dose_evaluation_metrics(
         dose metric settings, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Optional cache produced by structure metrics. When provided, dose
+        Optional index of mask-file paths produced this run by structure metrics.
+        When provided, dose
         metrics reuse generated-space target/OAR masks from structure
         evaluation instead of repeating DVF registration and mask warping.
 
@@ -1047,7 +1048,7 @@ def evaluate_predicted_doses(
         and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Optional generated-space mask cache returned by structure metrics.
+        Optional index of mask-file paths returned by structure metrics this run.
         Passing it avoids repeating planning-to-generated CT registration for
         dose structure metrics.
 
