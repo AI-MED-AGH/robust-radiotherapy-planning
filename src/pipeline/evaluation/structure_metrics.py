@@ -1,21 +1,20 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _is_planning_ct_path
+from src.pipeline.helpers.helpers import _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
     _calculate_structure_registration_result,
     _get_structure_label_transform,
     _label_to_binary_mask,
+    _load_warped_structure_masks,
     _PatientContext,
     _PatientContextManager,
     _save_warped_structure_masks,
@@ -143,9 +142,6 @@ def calculate_structure_similarity_metrics(
         Per-comparison, per-label structure metrics.
     - generated_vs_real_structure_summary.csv
         Patient- and label-level summary statistics.
-    - warped structure mask cache files
-        CPU `.pt` files under `config.warped_structure_cache_dir`, keyed by
-        generated CT, for reuse by dose metrics in later independent runs.
 
     Parameters
     ----------
@@ -162,15 +158,15 @@ def calculate_structure_similarity_metrics(
         registration settings, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Optional CPU cache filled with planning masks warped into each
-        generated CT space. Passing this cache lets downstream dose metrics
+        Current run's index of generated CT paths to mask files on disk.
+        Passing this index lets downstream dose metrics
         reuse the same generated-space target/OAR masks without repeating DVF
         registration or mask resampling.
 
     Returns
     -------
     warped_mask_cache : WarpedStructureMaskCache
-        CPU cache of warped generated-space masks keyed by generated CT path.
+        Paths to mask files written this run, keyed by generated CT path.
         Empty when no valid registrations are produced.
 
     Raises
@@ -253,6 +249,17 @@ def calculate_structure_similarity_metrics(
         cpu_device=cpu_device,
     )
 
+    def prepare_registration(
+        gen_path: Path,
+        patient_id: str,
+        planning_ct: torch.Tensor,
+        config: MaisiTestingConfig,
+    ) -> _StructureRegistrationResult:
+        # Only completed writes are indexed; no disk lookup is needed here
+        if gen_path in warped_mask_cache:
+            return _StructureRegistrationResult(gen_path=gen_path, gen_ct=None, transform=None)
+        return _calculate_structure_registration_result(gen_path, patient_id, planning_ct, config)
+
     def append_metrics_for_registration(
         result: _StructureRegistrationResult,
         current_ctx: _PatientContext,
@@ -276,7 +283,9 @@ def calculate_structure_similarity_metrics(
         if result.info_message is not None:
             info_messages.append(result.info_message)
 
-        if result.gen_ct is None or result.transform is None:
+        cached_masks = _load_warped_structure_masks(config, result.gen_path, warped_mask_cache)
+        has_cached_masks = cached_masks is not None
+        if not has_cached_masks and (result.gen_ct is None or result.transform is None):
             warnings.append(
                 f"Skipping structure metrics for {current_ctx.patient_id}:"
                 + f" registration failed for {result.gen_path}"
@@ -287,13 +296,17 @@ def calculate_structure_similarity_metrics(
         transform = result.transform
 
         with torch.inference_mode():
-            generated_masks = warped_mask_cache.setdefault(result.gen_path, {})
+            generated_masks = cached_masks if cached_masks is not None else {}
             for label in config.structure_labels:
                 # Warp one planning label at a time.
                 # Only the current predicted/reference masks are moved to metric_device,
                 # so CUDA sees small boolean masks rather than full CT caches.
                 pred_mask_cpu = generated_masks.get(label)
                 if pred_mask_cpu is None:
+                    if gen_ct is None or transform is None:
+                        raise RuntimeError(
+                            f"Cannot warp structure label {label} for {result.gen_path}: missing registration data"
+                        )
                     pred_mask_cpu = _warp_planning_mask_to_generated_ct(
                         planning_mask=current_ctx.planning_masks[label],
                         generated_ct=gen_ct,
@@ -332,64 +345,33 @@ def calculate_structure_similarity_metrics(
                         }
                     )
 
-            _save_warped_structure_masks(config, result.gen_path, generated_masks)
+            if not has_cached_masks:
+                _save_warped_structure_masks(config, result.gen_path, generated_masks, warped_mask_cache)
 
-    # Define progress bar outside the loop since it is defined in different ways depending on device and number of tasks
-    pbar = tqdm(tasks, desc="Calculating generated vs real structure metrics")
+    def prepare_task(task: tuple[str, Path]) -> tuple[_StructureRegistrationResult, _PatientContext]:
+        patient_id, gen_path = task
+        # Only the preparation worker owns the context manager. The current
+        # metric callback holds its own context reference while the worker
+        # loads the next patient, so at most two patient contexts are retained.
+        ctx_mgr.retain_only({patient_id})
+        context = ctx_mgr.get(patient_id)
+        result = prepare_registration(gen_path, patient_id, context.planning_ct, config)
+        return result, context
 
-    number_of_tasks = len(tasks)
+    def calculate_task_metrics(
+        task: tuple[str, Path],
+        prepared: tuple[_StructureRegistrationResult, _PatientContext],
+    ) -> None:
+        result, context = prepared
+        append_metrics_for_registration(result, context)
 
-    if metric_device.type == "cuda" and number_of_tasks > 1:
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="structure-registration") as executor:
-            # Prefetch registration for task 0
-            first_patient_id, first_gen_path = tasks[0]
-            next_future = executor.submit(
-                _calculate_structure_registration_result,
-                first_gen_path,
-                first_patient_id,
-                ctx_mgr.get(first_patient_id).planning_ct,
-                config,
-            )
-
-            for i, (patient_id, _) in enumerate(pbar):
-                is_not_last_task = i + 1 < number_of_tasks
-
-                active_pids = {patient_id}
-                if is_not_last_task:
-                    active_pids.add(tasks[i + 1][0])
-
-                ctx_mgr.retain_only(active_pids)
-                current_ctx = ctx_mgr.get(patient_id)
-
-                # Wait for registration result of current task
-                result = next_future.result()
-
-                # Schedule registration for next task (across CTs or patient boundaries)
-                if is_not_last_task:
-                    next_patient_id, next_gen_path = tasks[i + 1]
-                    next_ctx = ctx_mgr.get(next_patient_id)
-                    next_future = executor.submit(
-                        _calculate_structure_registration_result,
-                        next_gen_path,
-                        next_patient_id,
-                        next_ctx.planning_ct,
-                        config,
-                    )
-
-                # Process CUDA metrics while next registration runs concurrently on CPU thread
-                append_metrics_for_registration(result=result, current_ctx=current_ctx)
-
-    else:
-        for patient_id, gen_path in pbar:
-            ctx_mgr.retain_only({patient_id})
-            current_ctx = ctx_mgr.get(patient_id)
-            result = _calculate_structure_registration_result(
-                gen_path=gen_path,
-                patient_id=patient_id,
-                planning_ct=current_ctx.planning_ct,
-                config=config,
-            )
-            append_metrics_for_registration(result=result, current_ctx=current_ctx)
+    _run_evaluation_tasks(
+        tasks,
+        prepare_task,
+        calculate_task_metrics,
+        config.device,
+        "Calculating generated vs real structure metrics",
+    )
 
     for message in info_messages:
         logger.info(message)

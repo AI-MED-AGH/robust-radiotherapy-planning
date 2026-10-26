@@ -391,7 +391,8 @@ def _load_dose_distribution(path: Path, transform: Compose) -> torch.Tensor:
 
 
 def _collect_single_dose_per_patient(dose_dir: Path, *, planning_only: bool) -> dict[str, Path]:
-    """Collect one unambiguous dose distribution for every patient.
+    """
+    Collect one unambiguous dose distribution for every patient.
 
     The directory is searched recursively for supported dose files (`.nii`,
     `.nii.gz`, and `.pt`). Each retained path is assigned to a patient using
@@ -456,7 +457,8 @@ def _collect_single_dose_per_patient(dose_dir: Path, *, planning_only: bool) -> 
 
 
 def _contains_dose_files(directory: Path) -> bool:
-    """Check whether a directory contains a supported dose distribution.
+    """
+    Check whether a directory contains a supported dose distribution.
 
     Parameters
     ----------
@@ -480,7 +482,8 @@ def _planning_masks_for_dose(
     structure_transform: Compose,
     config: MaisiTestingConfig,
 ) -> dict[int, torch.Tensor] | None:
-    """Load configured fraction-1 structure masks for a dose file.
+    """
+    Load configured fraction-1 structure masks for a dose file.
 
     Parameters
     ----------
@@ -511,7 +514,8 @@ def _planning_masks_for_dose(
 
 
 def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConfig, stem: str) -> None:
-    """Write detailed scenario metrics and their across-scenario summary.
+    """
+    Write detailed scenario metrics and their across-scenario summary.
 
     Parameters
     ----------
@@ -556,7 +560,8 @@ def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConf
 
 
 def _write_smoke_test_outputs(rows: list[dict[str, Any]], config: MaisiTestingConfig) -> None:
-    """Write base-dose comparisons against original-anatomy metric values.
+    """
+    Write base-dose comparisons against original-anatomy metric values.
 
     Parameters
     ----------
@@ -630,7 +635,32 @@ def _select_dose_for_anatomy(
     dose_source: str,
     force_clinical: bool = False,
 ) -> tuple[Path | None, str]:
-    """Select a patient's single candidate dose or clinical fallback."""
+    """
+    Select the patient dose or fall back to the first clinical fraction dose.
+
+    Parameters
+    ----------
+    patient_dose : Path | None
+        Patient-specific candidate dose path, if available.
+
+    clinical_path : Path | None
+        First clinical fraction dose path, if available.
+
+    dose_source : str
+        Source name used to label the patient-specific dose.
+
+    force_clinical : bool, optional
+        Select the clinical path even if a patient dose is available.
+
+    Returns
+    -------
+    tuple[Path | None, str]
+        Selected dose path and its source label. The label is
+        ``clinical_fraction_1`` when forced, ``{dose_source}_patient_dose``
+        for a patient dose, ``clinical_fraction_1_fallback`` for the clinical
+        fallback, or ``none`` when neither path is available. A forced clinical
+        selection can return a ``None`` path.
+    """
 
     if force_clinical:
         return clinical_path, "clinical_fraction_1"
@@ -688,7 +718,7 @@ def _warp_planning_masks_for_predicted_dose(
         CPU cache of planning structure label maps keyed by patient ID.
 
     generated_mask_cache : WarpedStructureMaskCache
-        CPU cache of warped planning masks keyed by generated CT path.
+        Current run's index of generated CT paths to mask files on disk.
 
     config : MaisiTestingConfig
         Pipeline configuration containing CT, structure, and registration
@@ -716,16 +746,10 @@ def _warp_planning_masks_for_predicted_dose(
             f"Using reference-space dose masks for {pred_path}: no matching generated CT found",
         )
 
-    # Check the current run's cache before touching disk or running deformable
-    # registration, which is the most expensive path through this helper
-    cached_masks = generated_mask_cache.get(gen_ct_path)
+    # Load only a file registered by this run. An index miss never searches disk.
+    cached_masks = _load_warped_structure_masks(config, gen_ct_path, generated_mask_cache)
     if cached_masks is not None:
         return cached_masks, "warped_planning_structure_to_generated_ct", None, None
-
-    persisted_masks = _load_warped_structure_masks(config, gen_ct_path)
-    if persisted_masks is not None:
-        generated_mask_cache[gen_ct_path] = persisted_masks
-        return persisted_masks, "persisted_warped_planning_structure_to_generated_ct", None, None
 
     planning_ct_path = _planning_ct_path_for_patient(patient_id, config)
     if planning_ct_path is None:
@@ -796,10 +820,8 @@ def _warp_planning_masks_for_predicted_dose(
             config=config,
         )
 
-    # Persist successful warps so both later dose comparisons and future runs
-    # can bypass registration for this generated anatomy
-    generated_mask_cache[gen_ct_path] = warped_masks
-    _save_warped_structure_masks(config, gen_ct_path, warped_masks)
+    # Reuse successful warps only for later comparisons in this run
+    _save_warped_structure_masks(config, gen_ct_path, warped_masks, generated_mask_cache)
 
     return warped_masks, "warped_planning_structure_to_generated_ct", result.info_message, None
 
@@ -863,7 +885,7 @@ def _load_dose_comparison_data(
         CPU cache of planning structure label maps keyed by patient ID.
 
     generated_mask_cache : WarpedStructureMaskCache
-        CPU cache of DVF-warped generated-space masks keyed by generated CT.
+        Current run's index of generated CT paths to mask files on disk.
 
     config : MaisiTestingConfig
         Pipeline configuration containing paths and preprocessing settings.
@@ -876,7 +898,7 @@ def _load_dose_comparison_data(
     """
 
     # Predicted doses are unique per pair, whereas a reference is commonly
-    # reused by several generated scenarios and therefore benefits from caching
+    # reused by several generated scenarios and therefore benefits from caching.
     pred_dose = _load_dose_distribution(pred_path, dose_transform)
     ref_dose = reference_dose_cache.get(ref_path)
     if ref_dose is None:

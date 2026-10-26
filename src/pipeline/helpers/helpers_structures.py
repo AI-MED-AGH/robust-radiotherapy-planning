@@ -19,12 +19,105 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _extract_patient_id, _load_hu_tensor, _normalised_image_key
+from src.pipeline.helpers.helpers import _extract_patient_id, _load_hu_tensor
 from src.pipeline.helpers.helpers_metrics import _as_metric_tensor, _resolve_metric_device
 
 logger = logging.getLogger(__name__)
 
-WarpedStructureMaskCache = dict[Path, dict[int, torch.Tensor]]
+WarpedStructureMaskCache = dict[Path, Path]
+
+
+def _save_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+    masks: dict[int, torch.Tensor],
+    cache: WarpedStructureMaskCache,
+) -> None:
+    """
+    Save masks under the generated CT's name and index them for this run.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Configuration providing the cache directory and required labels.
+
+    generated_ct_path : Path
+        Generated CT whose anatomy the masks describe.
+
+    masks : dict[int, torch.Tensor]
+        Complete generated-space masks, stored as CPU Boolean tensors.
+
+    cache : WarpedStructureMaskCache
+        Current run's path index, updated only after the file is fully written.
+        No tensor references are retained in this index.
+
+    Raises
+    ------
+    ValueError
+        If a configured structure label is missing.
+
+    OSError
+        If the directory or mask file cannot be written.
+    """
+
+    if any(label not in masks for label in config.structure_labels):
+        raise ValueError(f"Cannot cache incomplete warped masks for {generated_ct_path}")
+    cache_path = config.warped_structure_cache_dir / generated_ct_path.relative_to(config.generated_ct_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("wb") as output:
+        torch.save({label: masks[label].detach().cpu().bool() for label in config.structure_labels}, output)
+    cache[generated_ct_path] = cache_path
+
+
+def _load_warped_structure_masks(
+    config: MaisiTestingConfig,
+    generated_ct_path: Path,
+    cache: WarpedStructureMaskCache,
+) -> dict[int, torch.Tensor] | None:
+    """
+    Load masks only from a file registered in the current run's index.
+
+    Parameters
+    ----------
+    config : MaisiTestingConfig
+        Configuration providing the required structure labels.
+
+    generated_ct_path : Path
+        Generated CT whose masks are requested.
+
+    cache : WarpedStructureMaskCache
+        Mapping of generated CT paths to mask files written during this run.
+
+    Returns
+    -------
+    masks : dict[int, torch.Tensor] | None
+        CPU Boolean masks, or ``None`` when no file is indexed. An index miss
+        performs no filesystem access. Loaded tensors are owned by the caller
+        and are not stored in the index.
+
+    Raises
+    ------
+    OSError
+        If an indexed file can no longer be read.
+
+    ValueError
+        If an indexed file does not contain all configured mask tensors.
+    """
+
+    cache_path = cache.get(generated_ct_path)
+    if cache_path is None:
+        return None
+    loaded = torch.load(cache_path, map_location="cpu", weights_only=True)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Invalid warped-mask cache file: {cache_path}")
+    masks: dict[int, torch.Tensor] = {}
+    for label in config.structure_labels:
+        value = loaded.get(label)
+        if not isinstance(value, torch.Tensor):
+            raise ValueError(f"Missing mask for label {label} in {cache_path}")
+        masks[label] = value.detach().cpu().bool()
+    return masks
+
 
 DemonsRegistrationAlgorithm = (
     sitk.DemonsRegistrationFilter
@@ -35,7 +128,8 @@ DemonsRegistrationAlgorithm = (
 
 @dataclass
 class _PatientContext:
-    """Preloaded CPU tensors and structure label maps for a single patient.
+    """
+    Preloaded CPU tensors and structure label maps for a single patient.
 
     Attributes
     ----------
@@ -499,99 +593,6 @@ def _surface_distances(
     )
 
     return distances
-
-
-def _warped_structure_mask_cache_path(config: MaisiTestingConfig, generated_ct_path: Path) -> Path:
-    """
-    Resolve the persisted warped-mask cache path for one generated CT.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path whose generated-space masks are cached.
-
-    Returns
-    -------
-    path : Path
-        Cache file path for warped masks keyed by structure label.
-    """
-
-    patient_id = _extract_patient_id(generated_ct_path)
-    return config.warped_structure_cache_dir / patient_id / f"{_normalised_image_key(generated_ct_path)}.pt"
-
-
-def _save_warped_structure_masks(
-    config: MaisiTestingConfig,
-    generated_ct_path: Path,
-    masks: dict[int, torch.Tensor],
-) -> None:
-    """
-    Persist generated-space warped structure masks for reuse by dose metrics.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path used as the cache key.
-
-    masks : dict[int, torch.Tensor]
-        CPU or GPU boolean masks keyed by structure label.
-    """
-
-    cache_path = _warped_structure_mask_cache_path(config, generated_ct_path)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({label: mask.detach().cpu().bool() for label, mask in masks.items()}, cache_path)
-
-
-def _load_warped_structure_masks(
-    config: MaisiTestingConfig,
-    generated_ct_path: Path,
-) -> dict[int, torch.Tensor] | None:
-    """
-    Load persisted generated-space warped structure masks when available.
-
-    Parameters
-    ----------
-    config : MaisiTestingConfig
-        Pipeline configuration containing `warped_structure_cache_dir`.
-
-    generated_ct_path : Path
-        Generated CT tensor path used as the cache key.
-
-    Returns
-    -------
-    masks : dict[int, torch.Tensor] | None
-        CPU boolean masks keyed by structure label, or `None` when no complete
-        cache exists for the configured structure labels.
-    """
-
-    cache_path = _warped_structure_mask_cache_path(config, generated_ct_path)
-    if not cache_path.exists():
-        return None
-
-    loaded = torch.load(cache_path, weights_only=True)
-    if not isinstance(loaded, dict):
-        logger.warning("Ignoring invalid warped-structure cache: %s", cache_path)
-        return None
-
-    masks: dict[int, torch.Tensor] = {}
-    for label in config.structure_labels:
-        value = loaded.get(label)
-        if value is None:
-            value = loaded.get(str(label))
-
-        if not isinstance(value, torch.Tensor):
-            logger.warning("Ignoring incomplete warped-structure cache: %s", cache_path)
-            return None
-
-        masks[label] = value.detach().cpu().bool()
-
-    return masks
 
 
 def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:

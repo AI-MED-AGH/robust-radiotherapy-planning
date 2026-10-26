@@ -224,9 +224,7 @@ class MaisiTestingConfig:
         against reference doses.
 
     warped_structure_cache_dir : Path
-        Directory containing persisted planning structure masks warped into
-        generated CT space. This cache lets independent dose-only evaluation
-        reuse DVF work produced by structure metrics.
+        Directory for mask files indexed only during the current evaluation run.
 
     logs_dir : Path
         Directory containing pipeline logs.
@@ -390,7 +388,7 @@ class MaisiTestingConfig:
         Derives CT, structure, dose, and split JSON paths from ``data_root``;
         checkpoint paths from ``weights_dir``; and output paths from
         ``output_root``. Processed CT, latent, generated CT, predicted dose,
-        warped structure cache, and metrics directories also include
+        and metrics directories also include
         ``evaluation_split``. The logs directory is shared across splits.
 
         Parameters

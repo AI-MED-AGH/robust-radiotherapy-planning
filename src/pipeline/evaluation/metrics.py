@@ -27,7 +27,8 @@ def evaluate_doses(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Validate dose inputs and dispatch the configured evaluation workflows.
+    """
+    Validate dose inputs and dispatch the configured evaluation workflows.
 
     The function always checks whether dose evaluation is enabled and whether
     clinical dose files are available. It can then run the base-dose smoke
@@ -42,7 +43,7 @@ def evaluate_doses(
         metric settings, structure labels, and output paths.
 
     warped_mask_cache : WarpedStructureMaskCache | None, optional
-        Generated-space structure masks produced during structure evaluation.
+        Index of mask-file paths produced during structure evaluation this run.
         Reusing this cache avoids repeating planning-to-generated registration.
     """
 
@@ -55,6 +56,11 @@ def evaluate_doses(
     if not _contains_dose_files(config.dose_root):
         logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
         return
+
+    # A standalone dose-evaluate run also shares masks between its workflows.
+    # Create a fresh cache per invocation; never recover masks from old outputs.
+    if warped_mask_cache is None:
+        warped_mask_cache = {}
 
     if config.use_base_dose_smoke_test:
         logger.info("Calculating fraction-1 base-dose smoke-test metrics")
@@ -308,9 +314,9 @@ def evaluate_generated_cts(
     # which can also have substantial CPU and GPU memory footprints
     _clean_pipeline_memory()
 
-    # Structure evaluation returns generated-space masks keyed by CT path.
+    # Structure evaluation returns mask-file paths keyed by generated CT path.
     # Dose evaluation consumes the same cache later when enabled.
-    warped_mask_cache = {}
+    warped_mask_cache: WarpedStructureMaskCache = {}
     if config.use_structure_metrics:
         logger.info("Calculating generated-vs-real structure metrics")
         warped_mask_cache = calculate_structure_similarity_metrics(

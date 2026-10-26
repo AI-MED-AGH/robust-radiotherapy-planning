@@ -45,8 +45,8 @@ def parse_args() -> argparse.Namespace:
         - dose_vx_thresholds
         - generated_ct_dir
         - predicted_dose_dir
-        - dose_root
         - warped_structure_cache_dir
+        - dose_root
         - processed_ct_dir
         - metrics_dir
     """
@@ -165,13 +165,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--warped-structure-cache-dir",
-        type=Path,
-        default=None,
-        help="Optional override for persisted warped structure mask cache directory",
-    )
-
-    parser.add_argument(
         "--dose-dvh-bin-width",
         type=float,
         default=None,
@@ -199,6 +192,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional override for processed/original CT directory",
+    )
+
+    parser.add_argument(
+        "--warped-structure-cache-dir",
+        type=Path,
+        default=None,
+        help="Directory for mask files reused only within the current run",
     )
 
     parser.add_argument(
@@ -279,8 +279,8 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
     for attribute in (
         "generated_ct_dir",
         "predicted_dose_dir",
-        "dose_root",
         "warped_structure_cache_dir",
+        "dose_root",
         "processed_ct_dir",
         "metrics_dir",
         "structures_root",
