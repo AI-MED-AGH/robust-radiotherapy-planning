@@ -2,7 +2,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 import SimpleITK as sitk
@@ -35,7 +34,7 @@ def _save_warped_structure_masks(
     cache: WarpedStructureMaskCache,
 ) -> None:
     """
-    Save masks to a new file and register its path for the current run.
+    Save masks under the generated CT's name and index them for this run.
 
     Parameters
     ----------
@@ -63,9 +62,9 @@ def _save_warped_structure_masks(
 
     if any(label not in masks for label in config.structure_labels):
         raise ValueError(f"Cannot cache incomplete warped masks for {generated_ct_path}")
-    config.warped_structure_cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = config.warped_structure_cache_dir / f"{uuid4().hex}.pt"
-    with cache_path.open("xb") as output:
+    cache_path = config.warped_structure_cache_dir / generated_ct_path.relative_to(config.generated_ct_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("wb") as output:
         torch.save({label: masks[label].detach().cpu().bool() for label in config.structure_labels}, output)
     cache[generated_ct_path] = cache_path
 
