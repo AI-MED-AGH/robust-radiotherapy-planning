@@ -20,7 +20,8 @@ def _run_evaluation_tasks(
     device: str,
     description: str,
 ) -> None:
-    """Prepare evaluation data ahead of metrics using a single CPU worker.
+    """
+    Prepare evaluation data ahead of metrics using a single CPU worker.
 
     Parameters
     ----------
@@ -86,7 +87,8 @@ def _clean_pipeline_memory() -> None:
 
 
 def _is_planning_ct_path(path: str | Path) -> bool:
-    """Determine whether a CT path identifies the planning scan.
+    """
+    Determine whether a CT path identifies the planning scan.
 
     A planning CT is identified by the ``"fraction_1_"`` marker in its
     filename.

@@ -34,7 +34,8 @@ def _save_warped_structure_masks(
     masks: dict[int, torch.Tensor],
     cache: WarpedStructureMaskCache,
 ) -> None:
-    """Save masks to a new file and register its path for the current run.
+    """
+    Save masks to a new file and register its path for the current run.
 
     Parameters
     ----------
@@ -70,7 +71,8 @@ def _load_warped_structure_masks(
     generated_ct_path: Path,
     cache: WarpedStructureMaskCache,
 ) -> dict[int, torch.Tensor] | None:
-    """Load masks only from a file registered in the current run's index.
+    """
+    Load masks only from a file registered in the current run's index.
 
     Parameters
     ----------
@@ -120,7 +122,8 @@ DemonsRegistrationAlgorithm = (
 
 @dataclass
 class _PatientContext:
-    """Preloaded CPU tensors and structure label maps for a single patient.
+    """
+    Preloaded CPU tensors and structure label maps for a single patient.
 
     Attributes
     ----------

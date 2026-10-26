@@ -15,7 +15,8 @@ class LPIPSModel(Protocol):
     """Callable interface implemented by LPIPS model instances."""
 
     def __call__(self, pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
-        """Calculate perceptual distances between two image batches.
+        """
+        Calculate perceptual distances between two image batches.
 
         Parameters
         ----------

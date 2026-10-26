@@ -43,7 +43,8 @@ def dose_volume_histogram(
     mask: torch.Tensor | np.ndarray,
     bin_width: float,
 ) -> pd.DataFrame:
-    """Calculate a cumulative DVH for a masked volume.
+    """
+    Calculate a cumulative DVH for a masked volume.
 
     For each regularly spaced dose threshold, the cumulative DVH reports the
     percentage of selected structure voxels receiving at least that dose.
@@ -97,7 +98,8 @@ def dose_at_volume(
     mask: torch.Tensor | np.ndarray,
     volume_percent: float,
 ) -> float:
-    """Calculate Dx, the dose received by at least x percent of a volume.
+    """
+    Calculate Dx, the dose received by at least x percent of a volume.
 
     Dx is evaluated as the lower-tail quantile ``(100 - x) / 100`` using
     linear interpolation. For example, D95 is the fifth percentile of the
@@ -152,7 +154,8 @@ def volume_at_dose(
     mask: torch.Tensor | np.ndarray,
     dose_threshold: float,
 ) -> float:
-    """Calculate Vx, the percentage of a volume receiving at least x dose.
+    """
+    Calculate Vx, the percentage of a volume receiving at least x dose.
 
     Parameters
     ----------
@@ -184,7 +187,8 @@ def volume_at_dose(
 
 
 def mean_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
-    """Calculate the arithmetic mean dose inside a structure mask.
+    """
+    Calculate the arithmetic mean dose inside a structure mask.
 
     Parameters
     ----------
@@ -213,7 +217,8 @@ def mean_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) 
 
 
 def maximum_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> float:
-    """Calculate the maximum dose inside a structure mask.
+    """
+    Calculate the maximum dose inside a structure mask.
 
     Parameters
     ----------
@@ -246,7 +251,8 @@ def _clinical_metric_values(
     mask: torch.Tensor,
     config: MaisiTestingConfig,
 ) -> dict[str, float]:
-    """Calculate configured clinical metrics inside one structure mask.
+    """
+    Calculate configured clinical metrics inside one structure mask.
 
     Parameters
     ----------
@@ -293,7 +299,8 @@ def _append_single_dose_rows(
     config: MaisiTestingConfig,
     metadata: dict[str, Any],
 ) -> None:
-    """Append long-form metrics for one dose and a set of structures.
+    """
+    Append long-form metrics for one dose and a set of structures.
 
     Parameters
     ----------
@@ -349,7 +356,8 @@ def _evaluate_dose_on_real_structures(
     dose_source: str,
     force_clinical: bool = False,
 ) -> list[dict[str, Any]]:
-    """Evaluate selected doses on every available real-fraction structure map.
+    """
+    Evaluate selected doses on every available real-fraction structure map.
 
     Parameters
     ----------
@@ -434,7 +442,8 @@ def _evaluate_dose_on_generated_structures(
     dose_source: str,
     warped_mask_cache: WarpedStructureMaskCache,
 ) -> list[dict[str, Any]]:
-    """Evaluate each patient's single selected dose on generated structures.
+    """
+    Evaluate each patient's single selected dose on generated structures.
 
     Parameters
     ----------
@@ -561,7 +570,8 @@ def _evaluate_dose_on_generated_structures(
 
 
 def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
-    """Compare patient-level candidate and clinical doses on fraction-1 structures.
+    """
+    Compare patient-level candidate and clinical doses on fraction-1 structures.
 
     For every patient with an unambiguous candidate and clinical planning
     dose, calculate the configured clinical metrics using the original
@@ -634,7 +644,8 @@ def evaluate_scenario_robustness(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Evaluate configured candidate doses across real and generated anatomies.
+    """
+    Evaluate configured candidate doses across real and generated anatomies.
 
     Each patient's single candidate dose is held fixed while metrics are
     evaluated on observed real-fraction and generated-anatomy structure masks.
@@ -680,7 +691,8 @@ def evaluate_base_dose_smoke_test(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Evaluate the clinical fraction-1 dose on all real and generated structures.
+    """
+    Evaluate the clinical fraction-1 dose on all real and generated structures.
 
     The numerical dose is held fixed while structure masks come from the
     original fraction, observed follow-up fractions, and generated anatomies.

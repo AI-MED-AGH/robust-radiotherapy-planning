@@ -391,7 +391,8 @@ def _load_dose_distribution(path: Path, transform: Compose) -> torch.Tensor:
 
 
 def _collect_single_dose_per_patient(dose_dir: Path, *, planning_only: bool) -> dict[str, Path]:
-    """Collect one unambiguous dose distribution for every patient.
+    """
+    Collect one unambiguous dose distribution for every patient.
 
     The directory is searched recursively for supported dose files (`.nii`,
     `.nii.gz`, and `.pt`). Each retained path is assigned to a patient using
@@ -456,7 +457,8 @@ def _collect_single_dose_per_patient(dose_dir: Path, *, planning_only: bool) -> 
 
 
 def _contains_dose_files(directory: Path) -> bool:
-    """Check whether a directory contains a supported dose distribution.
+    """
+    Check whether a directory contains a supported dose distribution.
 
     Parameters
     ----------
@@ -480,7 +482,8 @@ def _planning_masks_for_dose(
     structure_transform: Compose,
     config: MaisiTestingConfig,
 ) -> dict[int, torch.Tensor] | None:
-    """Load configured fraction-1 structure masks for a dose file.
+    """
+    Load configured fraction-1 structure masks for a dose file.
 
     Parameters
     ----------
@@ -511,7 +514,8 @@ def _planning_masks_for_dose(
 
 
 def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConfig, stem: str) -> None:
-    """Write detailed scenario metrics and their across-scenario summary.
+    """
+    Write detailed scenario metrics and their across-scenario summary.
 
     Parameters
     ----------
@@ -556,7 +560,8 @@ def _write_scenario_outputs(rows: list[dict[str, Any]], config: MaisiTestingConf
 
 
 def _write_smoke_test_outputs(rows: list[dict[str, Any]], config: MaisiTestingConfig) -> None:
-    """Write base-dose comparisons against original-anatomy metric values.
+    """
+    Write base-dose comparisons against original-anatomy metric values.
 
     Parameters
     ----------
@@ -630,7 +635,32 @@ def _select_dose_for_anatomy(
     dose_source: str,
     force_clinical: bool = False,
 ) -> tuple[Path | None, str]:
-    """Select a patient's single candidate dose or clinical fallback."""
+    """
+    Select the patient dose or fall back to the first clinical fraction dose.
+
+    Parameters
+    ----------
+    patient_dose : Path | None
+        Patient-specific candidate dose path, if available.
+
+    clinical_path : Path | None
+        First clinical fraction dose path, if available.
+
+    dose_source : str
+        Source name used to label the patient-specific dose.
+
+    force_clinical : bool, optional
+        Select the clinical path even if a patient dose is available.
+
+    Returns
+    -------
+    tuple[Path | None, str]
+        Selected dose path and its source label. The label is
+        ``clinical_fraction_1`` when forced, ``{dose_source}_patient_dose``
+        for a patient dose, ``clinical_fraction_1_fallback`` for the clinical
+        fallback, or ``none`` when neither path is available. A forced clinical
+        selection can return a ``None`` path.
+    """
 
     if force_clinical:
         return clinical_path, "clinical_fraction_1"

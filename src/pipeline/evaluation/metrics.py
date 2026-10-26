@@ -27,7 +27,8 @@ def evaluate_doses(
     config: MaisiTestingConfig,
     warped_mask_cache: WarpedStructureMaskCache | None = None,
 ) -> None:
-    """Validate dose inputs and dispatch the configured evaluation workflows.
+    """
+    Validate dose inputs and dispatch the configured evaluation workflows.
 
     The function always checks whether dose evaluation is enabled and whether
     clinical dose files are available. It can then run the base-dose smoke
