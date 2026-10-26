@@ -41,10 +41,13 @@ def _save_warped_structure_masks(
     ----------
     config : MaisiTestingConfig
         Configuration providing the cache directory and required labels.
+
     generated_ct_path : Path
         Generated CT whose anatomy the masks describe.
+
     masks : dict[int, torch.Tensor]
         Complete generated-space masks, stored as CPU Boolean tensors.
+        
     cache : WarpedStructureMaskCache
         Current run's path index, updated only after the file is fully written.
         No tensor references are retained in this index.
@@ -53,6 +56,7 @@ def _save_warped_structure_masks(
     ------
     ValueError
         If a configured structure label is missing.
+
     OSError
         If the directory or mask file cannot be written.
     """
@@ -78,8 +82,10 @@ def _load_warped_structure_masks(
     ----------
     config : MaisiTestingConfig
         Configuration providing the required structure labels.
+
     generated_ct_path : Path
         Generated CT whose masks are requested.
+
     cache : WarpedStructureMaskCache
         Mapping of generated CT paths to mask files written during this run.
 
@@ -94,6 +100,7 @@ def _load_warped_structure_masks(
     ------
     OSError
         If an indexed file can no longer be read.
+        
     ValueError
         If an indexed file does not contain all configured mask tensors.
     """
