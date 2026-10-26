@@ -5,9 +5,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+from monai.metrics import compute_hausdorff_distance  # type: ignore[attr-defined]
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _is_planning_ct_path, _run_evaluation_tasks
+from src.pipeline.helpers.helpers import _clean_pipeline_memory, _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_structures import (
     WarpedStructureMaskCache,
     _as_binary_mask_pair,
@@ -20,7 +21,6 @@ from src.pipeline.helpers.helpers_structures import (
     _save_warped_structure_masks,
     _structure_path_for_ct,
     _StructureRegistrationResult,
-    _surface_distances,
     _warp_planning_mask_to_generated_ct,
 )
 
@@ -67,22 +67,13 @@ def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.nda
     return float((2.0 * (pred_t & ref_t).sum().item()) / (pred_sum + ref_sum))
 
 
-def hausdorff_and_hd95(
+def hausdorff_distance(
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
     spacing: tuple[float, float, float],
-) -> tuple[float, float]:
+) -> float:
     """
-    Calculate HD and HD95 from a single surface-distance pass.
-
-    HD is the maximum symmetric surface distance. HD95 is the 95th percentile
-    of the same symmetric surface-distance distribution, making it less
-    sensitive to isolated outlier voxels. Calculating both together avoids
-    recomputing surfaces and pairwise nearest-neighbor distances.
-
-    Foreground-empty mask convention:
-    - Both masks have no foreground voxels -> ``(0.0, 0.0)``.
-    - Only one mask has no foreground voxels -> ``(inf, inf)``.
+    Calculate Hausdorff distance (HD) for a pair of 3D structure masks.
 
     Parameters
     ----------
@@ -97,9 +88,8 @@ def hausdorff_and_hd95(
 
     Returns
     -------
-    metrics : tuple[float, float]
-        Pair containing symmetric Hausdorff distance and HD95 in physical
-        units.
+    HD : float
+        The Hausdorff distance between the structures.
 
     Raises
     ------
@@ -109,12 +99,13 @@ def hausdorff_and_hd95(
         If the masks have different shapes.
     """
 
-    distances = _surface_distances(pred, ref, spacing)
+    pred_t, ref_t = _as_binary_mask_pair(pred, ref)
 
-    if isinstance(distances, float):
-        return distances, distances
+    # MONAI expects the first dimension to be batch and second to be class
+    pred_t = pred_t.unsqueeze(0).unsqueeze(0)
+    ref_t = ref_t.unsqueeze(0).unsqueeze(0)
 
-    return float(distances.max().item()), float(torch.quantile(distances, 0.95).item())
+    return float(compute_hausdorff_distance(pred_t, ref_t, spacing=spacing))
 
 
 def calculate_structure_similarity_metrics(
@@ -135,7 +126,6 @@ def calculate_structure_similarity_metrics(
     Metrics:
     - Dice / DSC: higher means better structure overlap.
     - HD: lower means closer maximum boundary agreement.
-    - HD95: lower means closer robust boundary agreement.
 
     Outputs:
     - generated_vs_real_structure_metrics.csv
@@ -322,13 +312,16 @@ def calculate_structure_similarity_metrics(
                     ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
                     try:
                         dice = dice_coefficient(pred_mask, ref_mask)
-                        hd, hd95_value = hausdorff_and_hd95(pred_mask, ref_mask, spacing=config.spacing)
+                        hd = hausdorff_distance(pred_mask, ref_mask, spacing=config.spacing)
                     except ValueError as exc:
                         warnings.append(
                             f"Skipping invalid structure masks for {current_ctx.patient_id}, label {label}: {exc}"
                         )
                         del ref_mask
                         continue
+
+                    # MONAI is prone to not clean memory properly when calculating Hausdorff
+                    _clean_pipeline_memory()
 
                     rows.append(
                         {
@@ -341,7 +334,6 @@ def calculate_structure_similarity_metrics(
                             "structure_label": label,
                             "dice": dice,
                             "hd": hd,
-                            "hd95": hd95_value,
                         }
                     )
 
@@ -388,9 +380,7 @@ def calculate_structure_similarity_metrics(
     df.to_csv(metrics_path, index=False)
     logger.info("Saved structure metrics: %s", metrics_path)
 
-    summary = df.groupby(["patient_id", "structure_label"])[["dice", "hd", "hd95"]].agg(
-        ["mean", "std", "min", "max", "count"]
-    )
+    summary = df.groupby(["patient_id", "structure_label"])[["dice", "hd"]].agg(["mean", "std", "min", "max", "count"])
     summary_path = config.metrics_dir / "generated_vs_real_structure_summary.csv"
     summary.to_csv(summary_path)
     logger.info("Saved structure metric summary: %s", summary_path)

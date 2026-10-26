@@ -6,7 +6,6 @@ from typing import Any
 import numpy as np
 import SimpleITK as sitk
 import torch
-import torch.nn.functional as F
 from monai.data.meta_tensor import MetaTensor
 from monai.transforms import (  # type: ignore[attr-defined]
     CenterSpatialCropd,
@@ -432,68 +431,6 @@ def _as_binary_mask_pair(
     return pred_t, ref_t
 
 
-def _surface_voxels(mask: torch.Tensor) -> torch.Tensor:
-    """
-    Identify foreground surface voxels in a 3D binary mask.
-
-    A foreground voxel is considered part of the surface when its 3x3x3
-    neighborhood is not completely filled with foreground. Padding makes
-    foreground voxels on the image boundary count as surface voxels.
-
-    Parameters
-    ----------
-    mask : torch.Tensor
-        Boolean 3D foreground mask.
-
-    Returns
-    -------
-    surface : torch.Tensor
-        Boolean 3D mask containing only foreground surface voxels.
-    """
-
-    volume = mask.float().unsqueeze(0).unsqueeze(0)
-    kernel = torch.ones((1, 1, 3, 3, 3), dtype=torch.float32, device=mask.device)
-    neighbor_count = F.conv3d(volume, kernel, padding=1).squeeze(0).squeeze(0)
-
-    return mask & (neighbor_count < 27.0)
-
-
-def _nearest_distances(
-    source_points: torch.Tensor,
-    target_points: torch.Tensor,
-    batch_size: int = 512,
-) -> torch.Tensor:
-    """
-    Calculate nearest-neighbor distances from source points to target points.
-
-    Distances are computed in batches to avoid materializing one very large
-    pairwise distance matrix for large structure surfaces.
-
-    Parameters
-    ----------
-    source_points : torch.Tensor
-        Tensor of source coordinates with shape ``[N, 3]``.
-
-    target_points : torch.Tensor
-        Tensor of target coordinates with shape ``[M, 3]``.
-
-    batch_size : int
-        Number of source points processed per distance batch.
-
-    Returns
-    -------
-    distances : torch.Tensor
-        One nearest-target distance for each source point, shape ``[N]``.
-    """
-
-    chunks = []
-    for start in range(0, source_points.shape[0], batch_size):
-        chunk = source_points[start : start + batch_size]
-        chunks.append(torch.cdist(chunk, target_points).min(dim=1).values)
-
-    return torch.cat(chunks)
-
-
 def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
     """
     Resolve the original structure label-map path for a processed CT tensor.
@@ -521,78 +458,6 @@ def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
     patient_id = _extract_patient_id(ct_path)
     structure_name = ct_path.name.replace(".pt", ".nii.gz")
     return config.structures_root / patient_id / structure_name
-
-
-def _surface_distances(
-    pred: torch.Tensor | np.ndarray,
-    ref: torch.Tensor | np.ndarray,
-    spacing: tuple[float, float, float],
-) -> torch.Tensor | float:
-    """
-    Calculate symmetric foreground-surface distances for two masks.
-
-    Surface voxels are extracted from both masks, converted to physical
-    coordinates using ``spacing``, and compared in both directions with
-    batched nearest-neighbor distances. Foreground-empty masks follow the
-    metric convention used by the structure evaluation: both foreground-empty
-    masks return ``0.0`` and one foreground-empty mask returns positive
-    infinity.
-
-    Parameters
-    ----------
-    pred : torch.Tensor | np.ndarray
-        Predicted, generated, or warped 3D structure mask.
-
-    ref : torch.Tensor | np.ndarray
-        Reference 3D structure mask.
-
-    spacing : tuple[float, float, float]
-        Physical voxel spacing for the mask axes.
-
-    Returns
-    -------
-    distances : torch.Tensor | float
-        Symmetric surface distances for masks with foreground voxels, or a
-        scalar foreground-empty convention value.
-
-    Raises
-    ------
-    ValueError
-        If either mask has zero elements.
-        If either mask is not 3-dimensional.
-        If the masks have different shapes.
-    """
-
-    pred_t, ref_t = _as_binary_mask_pair(pred, ref)
-    pred_empty = int(pred_t.sum().item()) == 0
-    ref_empty = int(ref_t.sum().item()) == 0
-
-    if pred_empty and ref_empty:
-        return 0.0
-
-    if pred_empty or ref_empty:
-        return float("inf")
-
-    # Hausdorff distance is defined on mask boundaries
-    pred_surface = _surface_voxels(pred_t)
-    ref_surface = _surface_voxels(ref_t)
-
-    # Surface coordinates are much smaller than dense foreground coordinates
-    pred_points = pred_surface.nonzero().float()
-    ref_points = ref_surface.nonzero().float()
-    spacing_t = torch.as_tensor(spacing, dtype=torch.float32, device=pred_points.device)
-    pred_points = pred_points * spacing_t
-    ref_points = ref_points * spacing_t
-
-    # Use both directions so HD is symmetric
-    distances = torch.cat(
-        [
-            _nearest_distances(pred_points, ref_points),
-            _nearest_distances(ref_points, pred_points),
-        ]
-    )
-
-    return distances
 
 
 def _tensor_to_sitk_image(tensor: torch.Tensor, config: MaisiTestingConfig, pixel_id: int) -> sitk.Image:
