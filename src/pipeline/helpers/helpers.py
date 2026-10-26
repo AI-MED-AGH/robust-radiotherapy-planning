@@ -27,16 +27,20 @@ def _run_evaluation_tasks(
     ----------
     tasks : Sequence[_Task]
         Ordered tasks, including tasks belonging to different patients.
+
     prepare : Callable[[_Task], _Result]
         Load CPU inputs and prepare registration for one task. On CUDA, only
         the single worker calls this function, so it owns preparation caches.
         Return any patient context needed by the metric callback with the result.
+        
     calculate_metrics : Callable[[_Task, _Result], None]
         Calculate metrics in the caller's thread using the prepared result.
         Must not mutate preparation caches while the worker is using them.
+
     device : str
         Metric device. CUDA with multiple tasks overlaps preparation of the
         next task with current metrics; CPU and single-task runs are sequential.
+        
     description : str
         Progress-bar description.
 
