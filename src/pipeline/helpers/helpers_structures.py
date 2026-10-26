@@ -46,7 +46,7 @@ def _save_warped_structure_masks(
 
     masks : dict[int, torch.Tensor]
         Complete generated-space masks, stored as CPU Boolean tensors.
-        
+
     cache : WarpedStructureMaskCache
         Current run's path index, updated only after the file is fully written.
         No tensor references are retained in this index.
@@ -99,7 +99,7 @@ def _load_warped_structure_masks(
     ------
     OSError
         If an indexed file can no longer be read.
-        
+
     ValueError
         If an indexed file does not contain all configured mask tensors.
     """
