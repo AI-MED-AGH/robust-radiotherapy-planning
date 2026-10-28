@@ -226,6 +226,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--opentps-config",
+        dest="opentps_config_path",
         type=Path,
         default=None,
         help="Machine/prescription/scenario settings used when robust dose generation is requested",
@@ -286,7 +287,6 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "use_base_dose_smoke_test": not args.no_base_dose_smoke_test,
         "use_scenario_robustness": args.scenario_robustness,
         "use_original_anatomy_comparison": args.original_anatomy_comparison,
-        "opentps_config_path": args.opentps_config,
         "generate_robust_doses": args.generate_robust_doses,
     }
 
@@ -304,6 +304,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     path_overrides = {}
     for attribute in (
+        "opentps_config_path",
         "generated_ct_dir",
         "predicted_dose_dir",
         "warped_structure_cache_dir",
