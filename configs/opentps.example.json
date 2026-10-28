@@ -1,14 +1,24 @@
 {
   "model_name": "selected-rflow-model",
-  "beam_model_path": "../machine/BDL.txt",
-  "ct_calibration_dir": "../machine/scanner",
+  "beam_model_path": "../machine/example/BDL_default_DN_RangeShifter.txt",
+  "ct_calibration_dir": "../machine/example/scanner",
   "target_label": 1,
   "prescription_gy": 60.0,
-  "gantry_angles": [0.0, 90.0, 180.0],
-  "couch_angles": [0.0, 0.0, 0.0],
+  "gantry_angles": [
+    0.0,
+    90.0,
+    180.0
+  ],
+  "couch_angles": [
+    0.0,
+    0.0,
+    0.0
+  ],
   "scenario_sets": {
     "nominal": [],
-    "one_generated": [1],
+    "one_generated": [
+      1
+    ],
     "all_generated": "all"
   },
   "oar_limits_gy": {
