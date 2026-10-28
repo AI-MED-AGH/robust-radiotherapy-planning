@@ -72,7 +72,7 @@ class _DoseComparisonData:
     pred_masks : dict[int, torch.Tensor] | None
         Predicted-anatomy masks on CPU, keyed by structure label; ``None`` when
         no predicted structure masks are available.
-        
+
     pred_structure_source : str
         Description of where predicted-anatomy masks came from, or ``"none"``.
 
@@ -81,10 +81,10 @@ class _DoseComparisonData:
 
     info_message : str | None
         Informational message to report while still evaluating available data.
-        
+
     nonfatal_warning : str | None
         Warning to report while continuing with available dose metrics.
-        
+
     warning : str | None
         Fatal comparison warning; when present, the evaluator records it and
         skips this comparison.

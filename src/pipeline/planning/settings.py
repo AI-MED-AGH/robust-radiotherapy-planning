@@ -79,7 +79,7 @@ class OpenTPSSettings:
     dose_primaries : int
         Positive MCsquare particle count for final dose recalculation. Defaults
         to 1,000,000.
-        
+
     max_iterations : int
         Positive upper bound on worst-case optimizer iterations. Defaults to
         200.
