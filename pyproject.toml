@@ -87,6 +87,11 @@ exclude = [
 # Standard stability settings
 warn_unused_configs = true
 
+# OpenTPS does not publish type stubs or a py.typed marker.
+[[tool.mypy.overrides]]
+module = ["opentps.*"]
+ignore_missing_imports = true
+
 [dependency-groups]
 dev = [
     "pandas-stubs>=3.0.3.260530,<4.0.0",

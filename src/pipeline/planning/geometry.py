@@ -308,3 +308,27 @@ def dose_to_nifti(dose: Any, path: Path) -> None:
     affine[:3, 3] = dose.origin
     affine = np.diag([-1.0, -1.0, 1.0, 1.0]) @ affine
     nib.save(make_nifti(values, affine), str(path))
+
+
+def mask_image(values: Any, reference: Any) -> Any:
+    """
+    Attach reference geometry to a uint8 structure-mask array.
+
+    Parameters
+    ----------
+    values : array_like
+        Mask values, normally Boolean or binary, already sampled on the
+        reference grid. Casting to uint8 does not validate binarity.
+
+    reference : nibabel.spatialimages.SpatialImage
+        Image supplying the voxel-to-world affine. The caller must ensure
+        that ``values`` has the corresponding spatial shape and orientation.
+
+    Returns
+    -------
+    mask : nibabel.Nifti1Image
+        In-memory uint8 image using the reference affine. No resampling,
+        shape validation, or file writing is performed.
+    """
+
+    return make_nifti(np.asarray(values, dtype=np.uint8), reference.affine)
