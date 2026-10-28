@@ -13,12 +13,14 @@ from src.pipeline.evaluation.image_metrics import (
     calculate_pairwise_variety_metrics,
     calculate_similarity_metrics,
 )
+from src.pipeline.evaluation.robust_dose_metrics import evaluate_robust_doses
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _clean_pipeline_memory, _extract_patient_id
 from src.pipeline.helpers.helpers_doses import _contains_dose_files
 from src.pipeline.helpers.helpers_metrics import _build_lpips_model
 from src.pipeline.helpers.helpers_structures import WarpedStructureMaskCache
+from src.pipeline.planning.robust_doses import generate_robust_doses
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,11 @@ def evaluate_doses(
     """
     Validate dose inputs and dispatch the configured evaluation workflows.
 
-    The function always checks whether dose evaluation is enabled and whether
-    clinical dose files are available. It can then run the base-dose smoke
-    test, predicted-vs-reference metrics, scenario robustness evaluation, and
-    original-anatomy comparison according to ``config``. Missing predicted
-    doses skip only workflows that require predictions.
+    The dose metrics switch controls all scoring. Evaluate available robust
+    doses from their completed manifest, or run the basic supplied-dose
+    workflows when no robust doses are available. Generation runs first when
+    requested, independently of whether evaluation is enabled. OpenTPS settings are inputs
+    to generation and do not select which doses are evaluated.
 
     Parameters
     ----------
@@ -47,14 +49,25 @@ def evaluate_doses(
         Reusing this cache avoids repeating planning-to-generated registration.
     """
 
+    if config.generate_robust_doses:
+        logger.info("Generating robust doses with OpenTPS")
+        generate_robust_doses(config)
+
     if not config.use_dose_metrics:
         logger.info("Skipping dose metrics: disabled by configuration")
         return
 
-    # Every dose workflow needs the clinical dose set, including the smoke
-    # test that intentionally runs without model predictions
+    if (config.robust_dose_dir / "manifest.json").is_file():
+        logger.info("Calculating robust dose metrics")
+        evaluate_robust_doses(config)
+        return
+    else:
+        logger.info("Skipping robust dose metrics: no completed dose manifest found in %s", config.robust_dose_dir)
+
+    # Supplied-dose workflows require clinical doses; robust recalculations
+    # above can be evaluated independently.
     if not _contains_dose_files(config.dose_root):
-        logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
+        logger.warning("Skipping supplied-dose metrics: no clinical dose files found in %s", config.dose_root)
         return
 
     # A standalone dose-evaluate run also shares masks between its workflows.
