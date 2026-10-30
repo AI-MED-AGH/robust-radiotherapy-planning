@@ -6,6 +6,7 @@ from src.pipeline.data.prepare_test_data import prepare_test_data
 from src.pipeline.evaluation.metrics import evaluate_doses, evaluate_generated_cts
 from src.pipeline.inference.encode_latents import encode_latents
 from src.pipeline.inference.run_generation import generate_ct_variants
+from src.pipeline.planning.robust_doses import generate_robust_doses
 from src.pipeline.stages import PIPELINE_STAGES, PipelineStage
 
 
@@ -21,7 +22,9 @@ def parse_args() -> argparse.Namespace:
     - encode: encode processed planning CTs into latent space
     - generate: generate CT variants from latent conditions
     - evaluate: calculate evaluation metrics
-    - all: run all stages in order
+    - dose-generate: optimize OpenTPS plans and calculate scenario/real-CT doses
+    - dose-evaluate: calculate dose metrics
+    - all: prepare, encode, generate CTs, then evaluate CTs and generate/evaluate doses
 
     Returns
     -------
@@ -215,6 +218,29 @@ def parse_args() -> argparse.Namespace:
         help="Optional override for original structure label-map directory",
     )
 
+    parser.add_argument(
+        "--generate-robust-doses",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Generate OpenTPS doses before evaluation (default: enabled for all); requires --opentps-config",
+    )
+    parser.add_argument(
+        "--opentps-config",
+        dest="opentps_config_path",
+        type=Path,
+        default=None,
+        help="Machine/prescription/scenario settings used when robust dose generation is requested",
+    )
+    parser.add_argument(
+        "--robust-dose-dir",
+        type=Path,
+        default=None,
+        help="Override OpenTPS plans, recalculated doses and manifest directory",
+    )
+    parser.add_argument("--ct-root", type=Path, default=None, help="Raw CT NIfTI root for dose calculation")
+    parser.add_argument("--rflow-weight-path", type=Path, default=None, help="Selected generation model checkpoint")
+    parser.add_argument("--vae-weight-path", type=Path, default=None, help="Selected VAE checkpoint")
+
     return parser.parse_args()
 
 
@@ -261,6 +287,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "use_base_dose_smoke_test": not args.no_base_dose_smoke_test,
         "use_scenario_robustness": args.scenario_robustness,
         "use_original_anatomy_comparison": args.original_anatomy_comparison,
+        "generate_robust_doses": args.generate_robust_doses,
     }
 
     if args.structure_labels is not None:
@@ -277,6 +304,7 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
 
     path_overrides = {}
     for attribute in (
+        "opentps_config_path",
         "generated_ct_dir",
         "predicted_dose_dir",
         "warped_structure_cache_dir",
@@ -284,6 +312,10 @@ def build_config(args: argparse.Namespace) -> MaisiTestingConfig:
         "processed_ct_dir",
         "metrics_dir",
         "structures_root",
+        "ct_root",
+        "robust_dose_dir",
+        "rflow_weight_path",
+        "vae_weight_path",
     ):
         path = getattr(args, attribute)
         if path is not None:
@@ -311,7 +343,9 @@ def run_stage(
     - generate: generate CT variants from latent conditions
     - evaluate: calculate generated-vs-real and variety metrics
     - dose-evaluate: calculate dose metrics
-    - all: run prepare, encode, generate, then evaluate (including doses)
+    - dose-generate: generate OpenTPS plans and scenario/real-CT doses
+    - all: prepare, encode, generate CTs, then evaluate CTs and generate/evaluate doses
+      (dose generation and scoring are enabled by default, with independent opt-outs)
 
     Parameters
     ----------
@@ -341,6 +375,9 @@ def run_stage(
 
     elif stage == "dose-evaluate":
         evaluate_doses(config)
+
+    elif stage == "dose-generate":
+        generate_robust_doses(config)
 
     elif stage == "all":
         prepare_test_data(config)

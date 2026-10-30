@@ -2,7 +2,7 @@
 [project]
 name = "robust-radiotherapy-planning"
 version = "0.1.0"
-requires-python = "==3.11.15"
+requires-python = "==3.12.15"
 dependencies = [
     "einops>=0.8.2,<1.0.0",
     "jupyter>=1.1.1,<2.0.0",
@@ -12,6 +12,7 @@ dependencies = [
     "mypy>=1.20.0,<2.0.0",
     "nibabel>=5.4.2,<6.0.0",
     "numpy>=2.4.4,<3.0.0",
+    "opentps-core>=3.0.1,<4.0.0",
     "optuna>=4.8.0,<5.0.0",
     "pandas>=2.2,<3.0.0",
     "ruff>=0.15.9,<1.0.0",
@@ -47,7 +48,7 @@ torchvision = [
 
 # Ruff configuration
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 
 # Include Jupyter Notebooks for Ruff
@@ -74,7 +75,7 @@ quote-style = "double"
 
 # Mypy configuration
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 
 # Explicitly exclude the notebooks directory from type checking
@@ -85,6 +86,11 @@ exclude = [
 
 # Standard stability settings
 warn_unused_configs = true
+
+# OpenTPS does not publish type stubs or a py.typed marker.
+[[tool.mypy.overrides]]
+module = ["opentps.*"]
+ignore_missing_imports = true
 
 [dependency-groups]
 dev = [

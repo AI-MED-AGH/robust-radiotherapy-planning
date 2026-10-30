@@ -125,8 +125,19 @@ class MaisiTestingConfig:
         structure-based metrics.
 
     use_dose_metrics : bool
-        Parent switch for all dose workflows. When false, the base-dose smoke
-        test and every predicted-dose evaluation are disabled.
+        Parent switch for all dose evaluation, including robust recalculations.
+        Dose generation is requested independently through generate_robust_doses.
+
+    generate_robust_doses : bool
+        Generate OpenTPS doses when evaluate_doses is called, independently
+        of use_dose_metrics. Defaults to false for every stage.
+        Explicit generation stages also request generation.
+
+    opentps_config_path : Path
+        Machine, prescription and scenario settings required for generation.
+        Defaults to configs/opentps.json when present, otherwise
+        configs/opentps.example.json. Providing a path alone does not enable
+        generation or evaluation. Customize it through path_overrides.
 
     use_base_dose_smoke_test : bool
         Whether to evaluate the clinical fraction-1 dose on the original and
@@ -261,6 +272,7 @@ class MaisiTestingConfig:
     structures_root: Path = field(init=False)
     dose_root: Path = field(init=False)
     data_dict_path: Path = field(init=False)
+    opentps_config_path: Path = field(init=False)
 
     # Output paths
     output_root: Path = Path("RESULTS/MAISI_TESTING")
@@ -271,6 +283,7 @@ class MaisiTestingConfig:
     latent_ct_dir: Path = field(init=False)
     generated_ct_dir: Path = field(init=False)
     predicted_dose_dir: Path = field(init=False)
+    robust_dose_dir: Path = field(init=False)
     warped_structure_cache_dir: Path = field(init=False)
     metrics_dir: Path = field(init=False)
     logs_dir: Path = field(init=False)
@@ -334,6 +347,8 @@ class MaisiTestingConfig:
     dose_dx_volume_percents: list[float] = field(default_factory=lambda: [2.0, 5.0, 50.0, 95.0, 98.0])
     dose_vx_thresholds: list[float] = field(default_factory=lambda: [5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0])
     use_dose_structure_warping: bool = True
+    # Generation is independent of evaluation; the JSON supplies planning inputs
+    generate_robust_doses: bool = False
 
     # Model configs (custom if needed, otherwise defaults are set in __post_init__)
     vae_config: dict[str, Any] | None = None
@@ -399,7 +414,7 @@ class MaisiTestingConfig:
             ``data_dict_path``, ``processed_ct_dir``, ``latent_ct_dir``,
             ``generated_ct_dir``, ``predicted_dose_dir``,
             ``warped_structure_cache_dir``, ``metrics_dir``, ``logs_dir``,
-            ``vae_weight_path``, and ``rflow_weight_path``.
+            ``vae_weight_path``, ``rflow_weight_path``, and ``opentps_config_path``.
             Values are assigned exactly as supplied, without adding a root
             or evaluation split. None or an empty mapping uses all defaults.
 
@@ -412,8 +427,10 @@ class MaisiTestingConfig:
         Notes
         -----
         Called during initialization before input validation and output
-        directory creation. This method only assigns paths; it does not check
-        their existence or create directories. Each call recalculates all
+        directory creation. The default OpenTPS path prefers configs/opentps.json
+        when it is a file, otherwise configs/opentps.example.json. The
+        path can be replaced through path_overrides. This
+        method does not create directories or validate the selected paths. Each call recalculates all
         derived paths, replacing their previous values. Changing a root or
         split afterward does not automatically recalculate derived paths.
         """
@@ -426,6 +443,11 @@ class MaisiTestingConfig:
             "logs_dir": self.output_root / "logs",
             "vae_weight_path": self.weights_dir / "autoencoder.pt",
             "rflow_weight_path": self.weights_dir / "diff_unet.pt",
+            "opentps_config_path": (
+                Path("configs/opentps.json")
+                if Path("configs/opentps.json").is_file()
+                else Path("configs/opentps.example.json")
+            ),
         }
 
         split_directories = {
@@ -433,6 +455,7 @@ class MaisiTestingConfig:
             "latent_ct_dir": "latents",
             "generated_ct_dir": "generated_ct",
             "predicted_dose_dir": "predicted_dose",
+            "robust_dose_dir": "robust_dose",
             "warped_structure_cache_dir": "warped_structure_masks",
             "metrics_dir": "metrics",
         }
@@ -477,6 +500,7 @@ class MaisiTestingConfig:
         self.latent_ct_dir.mkdir(parents=True, exist_ok=True)
         self.generated_ct_dir.mkdir(parents=True, exist_ok=True)
         self.predicted_dose_dir.mkdir(parents=True, exist_ok=True)
+        self.robust_dose_dir.mkdir(parents=True, exist_ok=True)
         self.warped_structure_cache_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -513,12 +537,32 @@ class MaisiTestingConfig:
         if self.stage in {"prepare", "all"} and not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
+        needs_planning = self.stage == "dose-generate" or (
+            self.stage in {"all", "evaluate", "dose-evaluate"} and self.generate_robust_doses
+        )
+        if needs_planning:
+            if self.opentps_config_path is None:
+                raise ValueError("Robust dose generation requires --opentps-config")
+            if not self.opentps_config_path.is_file():
+                raise FileNotFoundError(f"OpenTPS configuration does not exist: {self.opentps_config_path}")
+        if needs_planning and not self.ct_root.is_dir():
+            raise FileNotFoundError(f"Raw CT root does not exist: {self.ct_root}")
         needs_evaluation = self.stage in {"evaluate", "dose-evaluate", "all"}
-        needs_structures = self.use_dose_metrics or (self.stage != "dose-evaluate" and self.use_structure_metrics)
-        if needs_evaluation and needs_structures and not self.structures_root.exists():
+        needs_structures = (
+            needs_planning
+            or (needs_evaluation and self.use_dose_metrics)
+            or (self.stage in {"evaluate", "all"} and self.use_structure_metrics)
+        )
+        if needs_structures and not self.structures_root.is_dir():
             raise FileNotFoundError(f"STRUCTURES root does not exist: {self.structures_root}")
 
-        if needs_evaluation and self.use_dose_metrics and not self.dose_root.exists():
+        if (
+            needs_evaluation
+            and self.use_dose_metrics
+            and not needs_planning
+            and not (self.robust_dose_dir / "manifest.json").is_file()
+            and not self.dose_root.exists()
+        ):
             raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
 
         # Preparation builds the split from raw CTs; it does not read the JSON.
@@ -533,8 +577,10 @@ class MaisiTestingConfig:
         """Check existing inputs for a standalone stage before clearing outputs.
 
         Preparation and ``all`` produce their intermediate inputs during the
-        run. Evaluation permits an empty reference CT directory. Dose-only
-        workflows retain their optional prediction and clinical fallback rules.
+        run. Evaluation permits an empty reference CT directory only when
+        dose generation is disabled. Every standalone stage requesting dose
+        generation requires prepared CTs. Scenario-specific requirements are
+        checked by the planning input collector.
 
         Raises
         ------
@@ -560,6 +606,16 @@ class MaisiTestingConfig:
                 )
         if stage == "evaluate" and not self.processed_ct_dir.is_dir():
             raise FileNotFoundError(f"Reference CT directory does not exist: {self.processed_ct_dir}")
+        needs_planning = stage == "dose-generate" or (
+            stage in {"evaluate", "dose-evaluate"} and self.generate_robust_doses
+        )
+        if needs_planning:
+            if not self.processed_ct_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Prepared CT directory does not exist: {self.processed_ct_dir}; run 'prepare' first"
+                )
+            if not any(path.is_file() for path in self.processed_ct_dir.rglob("*.pt")):
+                raise ValueError(f"No prepared CTs in {self.processed_ct_dir}; run 'prepare' first")
 
     def _validate_inference_settings(self) -> None:
         """
