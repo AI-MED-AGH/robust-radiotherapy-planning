@@ -144,7 +144,7 @@ def _nifti(root: Path, patient: str, stem: str) -> Path:
     ValueError
         If neither extension exists or both extensions exist.
     """
-    
+
     matches = [path for suffix in (".nii.gz", ".nii") if (path := root / patient / f"{stem}{suffix}").is_file()]
     if len(matches) != 1:
         raise ValueError(f"Expected exactly one NIfTI for {patient}/{stem} in {root}; found {len(matches)}")
@@ -355,7 +355,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     OSError
         If settings, inputs or outputs cannot be accessed or written.
     """
-    
+
     if config.opentps_config_path is None:
         raise ValueError("Provide --opentps-config with machine, prescription and scenario settings")
     settings = OpenTPSSettings.load(config.opentps_config_path)

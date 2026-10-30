@@ -47,7 +47,7 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
     KeyError
         If a required manifest field is missing.
     """
-    
+
     manifest_path = config.robust_dose_dir / "manifest.json"
     with manifest_path.open(encoding="utf-8") as stream:
         manifest = json.load(stream)
