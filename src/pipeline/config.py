@@ -135,8 +135,7 @@ class MaisiTestingConfig:
 
     opentps_config_path : Path
         Machine, prescription and scenario settings required for generation.
-        Defaults to configs/opentps.json when present, otherwise
-        configs/opentps.example.json. Providing a path alone does not enable
+        Defaults to configs/opentps.json. Providing a path alone does not enable
         generation or evaluation. Customize it through path_overrides.
 
     use_base_dose_smoke_test : bool
@@ -427,8 +426,7 @@ class MaisiTestingConfig:
         Notes
         -----
         Called during initialization before input validation and output
-        directory creation. The default OpenTPS path prefers configs/opentps.json
-        when it is a file, otherwise configs/opentps.example.json. The
+        directory creation. The default OpenTPS path is configs/opentps.json. The
         path can be replaced through path_overrides. This
         method does not create directories or validate the selected paths. Each call recalculates all
         derived paths, replacing their previous values. Changing a root or
@@ -443,11 +441,7 @@ class MaisiTestingConfig:
             "logs_dir": self.output_root / "logs",
             "vae_weight_path": self.weights_dir / "autoencoder.pt",
             "rflow_weight_path": self.weights_dir / "diff_unet.pt",
-            "opentps_config_path": (
-                Path("configs/opentps.json")
-                if Path("configs/opentps.json").is_file()
-                else Path("configs/opentps.example.json")
-            ),
+            "opentps_config_path": Path("configs/opentps.json"),
         }
 
         split_directories = {
