@@ -10,6 +10,8 @@ Copy `configs/opentps.example.json` to `configs/opentps.json`. Set the machine b
 
 This config is required only to **generate new OpenTPS doses**. CTs and dose maps alone do not supply the machine and planning settings it needs.
 
+Set `model_name` to an identifier for the method that produced the selected CT scenarios, such as a PCA model or a rectified flow model. It is recorded in dose manifests and evaluation results.
+
 ## Run
 
 With prepared and generated CTs already available:

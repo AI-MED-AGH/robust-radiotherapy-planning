@@ -1,5 +1,5 @@
 {
-  "model_name": "selected-rflow-model",
+  "model_name": "selected-generation-model",
   "beam_model_path": "../machine/example/BDL_default_DN_RangeShifter.txt",
   "ct_calibration_dir": "../machine/example/scanner",
   "target_label": 1,
