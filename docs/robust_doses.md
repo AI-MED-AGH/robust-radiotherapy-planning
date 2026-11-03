@@ -26,8 +26,10 @@ Use the same `--robust-dose-dir` for both commands if you override the default. 
 To run the complete pipeline, including dose generation and evaluation:
 
 ```
-uv run python -m src.pipeline.cli all --cts-per-patient 5 --rflow-weight-path path/to/model.pt --opentps-config configs/opentps.json
+uv run python -m src.pipeline.cli all --cts-per-patient 5
 ```
+
+Replace `5` with the number of CT variants to generate per patient for evaluation. The command uses the default model checkpoint and OpenTPS configuration paths; use `--rflow-weight-path` or `--opentps-config` only to override them.
 
 `all` enables both dose steps by default. Use `--no-generate-robust-doses` or `--no-dose-metrics` to skip either step. 
 
