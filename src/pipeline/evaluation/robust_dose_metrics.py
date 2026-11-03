@@ -11,7 +11,7 @@ import torch
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.evaluation.dose_metrics import _clinical_metric_values, dose_volume_histogram
-from src.pipeline.planning.geometry import canonical_image, labels_on_grid, load_ct, make_nifti, resample_to_grid
+from src.pipeline.planning.geometry import canonical_image, labels_on_grid, load_ct
 
 
 def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
@@ -35,7 +35,7 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         If the manifest has an unsupported schema or empty plan/dose records,
         plan coverage differs, dose records are duplicated, scenario sets use
         inconsistent scan sources or unmatched comparison rows, a dose path
-        leaves the output root, or a dose is invalid or does not cover its CT.
+        leaves the output root, or a dose is invalid or its grid differs from its CT.
         Invalid metric settings also propagate from the metric helpers.
 
     OSError
@@ -79,16 +79,12 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         native = image.get_fdata(dtype=np.float32)
         if native.ndim != 3 or not np.isfinite(native).all() or (native < 0).any() or not (native > 0).any():
             raise ValueError(f"Invalid recalculated dose: {dose_path}")
-        # A dose must cover the full scan. Zero-padding a misaligned grid would
-        # otherwise produce apparently valid but misleading target metrics.
+        # The backend scores doses on the CT grid; mismatches indicate invalid
+        # geometry and must be rejected rather than resampled for evaluation.
         same_grid = image.shape == ct.shape and np.allclose(image.affine, ct.affine, atol=1e-3)
         if not same_grid:
-            coverage_image = make_nifti(np.ones(image.shape, dtype=np.uint8), image.affine)
-            coverage = np.asarray(resample_to_grid(coverage_image, ct, order=0).dataobj)
-            if not coverage.all():
-                raise ValueError(f"Recalculated dose does not cover the real CT grid: {dose_path}")
-        aligned = image if same_grid else resample_to_grid(image, ct, order=1)
-        dose = torch.from_numpy(np.asarray(aligned.dataobj, dtype=np.float32).copy())
+            raise ValueError(f"Recalculated dose grid does not match the real CT grid: {dose_path}")
+        dose = torch.from_numpy(native.copy())
         labels = labels_on_grid(Path(record["structure_path"]), ct)
         metadata = {
             **record,
