@@ -311,6 +311,7 @@ def _generated_anatomy(
     # Use the patch grid's physical voxel spacing for registration
     registration_config = copy.copy(config)
     voxel_spacing = grid.header.get_zooms()
+    # NiBabel returns NumPy float32 scalars, which SimpleITK SetSpacing rejects
     registration_config.spacing = (float(voxel_spacing[0]), float(voxel_spacing[1]), float(voxel_spacing[2]))
     transform = _register_planning_ct_to_generated_ct(planning_tensor, generated, registration_config)
     warped = {}
