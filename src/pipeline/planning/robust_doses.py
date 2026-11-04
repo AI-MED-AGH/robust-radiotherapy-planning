@@ -66,6 +66,9 @@ def _run_opentps_worker(request_path: Path) -> dict[str, Any]:
 
     json.JSONDecodeError
         If the worker result is not valid JSON.
+
+    UnicodeDecodeError
+        If the worker result cannot be decoded as UTF-8.
     """
 
     log_path = request_path.with_name("opentps.log")
@@ -275,7 +278,22 @@ def _generated_anatomy(
     ------
     ValueError
         If the generated tensor has an incorrect shape, nonfinite or
-        out-of-range HU values, or a warped mask has an incorrect shape.
+        out-of-range HU values, its dictionary lacks an ``image`` key, or a
+        warped mask has an incorrect shape.
+
+    OSError
+        If the generated tensor file is missing or cannot be read.
+
+    EOFError, pickle.UnpicklingError
+        If PyTorch cannot deserialize the generated tensor, including a
+        payload rejected by ``weights_only=True``.
+
+    RuntimeError
+        If PyTorch cannot load the tensor or SimpleITK registration/resampling
+        fails.
+
+    numpy.linalg.LinAlgError
+        If resampling requires inverting a singular reference affine.
     """
 
     generated = _load_tensor(path)
@@ -350,10 +368,41 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         shapes or generated HU values are invalid.
 
     RuntimeError
-        If an OpenTPS worker fails during planning or dose recalculation.
+        If an OpenTPS worker fails during planning or dose recalculation,
+        PyTorch cannot load a tensor, or SimpleITK registration/resampling fails.
 
     OSError
         If settings, inputs or outputs cannot be accessed or written.
+
+    json.JSONDecodeError
+        If the settings file or worker result is not valid JSON.
+
+    UnicodeDecodeError
+        If the settings file or worker result cannot be decoded as UTF-8.
+
+    KeyError
+        If a required settings field or worker result field is missing.
+
+    TypeError, AttributeError
+        If settings or worker result containers or field values have
+        incompatible types.
+
+    EOFError, pickle.UnpicklingError
+        If PyTorch cannot deserialize an input tensor, including a payload
+        rejected by ``weights_only=True``.
+
+    nibabel.filebasedimages.ImageFileError
+        If an input image is empty or its format cannot be recognized.
+
+    nibabel.spatialimages.HeaderDataError
+        If an input or output image header is invalid.
+
+    nibabel.orientations.OrientationError
+        If the planning CT axes cannot be reoriented to canonical orientation.
+
+    numpy.linalg.LinAlgError
+        If image orientation or resampling fails because an affine is singular
+        or its decomposition does not converge.
     """
 
     if config.opentps_config_path is None:

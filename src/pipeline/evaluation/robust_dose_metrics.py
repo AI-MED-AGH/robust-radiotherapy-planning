@@ -36,7 +36,8 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         plan coverage differs, dose records are duplicated, scenario sets use
         inconsistent scan sources or unmatched comparison rows, a dose path
         leaves the output root, or a dose is invalid or its grid differs from its CT.
-        Invalid metric settings also propagate from the metric helpers.
+        Invalid CT/structure values, unsupported CT geometry, invalid metric
+        settings and non-unique comparison keys also propagate from helpers.
 
     OSError
         If the manifest, input images or metric outputs cannot be accessed.
@@ -45,7 +46,27 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         If the manifest is not valid JSON.
 
     KeyError
-        If a required manifest field is missing.
+        If a required manifest field or metric grouping column is missing.
+
+    TypeError, AttributeError
+        If manifest containers or field values have incompatible types.
+
+    UnicodeDecodeError
+        If the manifest cannot be decoded as UTF-8.
+
+    nibabel.filebasedimages.ImageFileError
+        If a CT, dose or structure file is empty or has an unsupported or
+        unrecognizable image format.
+
+    nibabel.spatialimages.HeaderDataError
+        If an input image header is invalid.
+
+    nibabel.orientations.OrientationError
+        If CT or dose axes cannot be reoriented to canonical orientation.
+
+    numpy.linalg.LinAlgError
+        If image orientation or structure resampling fails because an affine
+        is singular or its decomposition does not converge.
     """
 
     manifest_path = config.robust_dose_dir / "manifest.json"

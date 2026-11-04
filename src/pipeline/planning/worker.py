@@ -42,14 +42,47 @@ def run_request(request_path: Path) -> Path:
 
     Raises
     ------
-    FileNotFoundError
-        If a referenced settings, CT, mask, or other input file is missing.
+    OSError
+        If the request, settings, CTs, masks or machine data cannot be read,
+        or simulation, plan, dose or result files cannot be written.
+
+    json.JSONDecodeError
+        If the request or settings file is not valid JSON.
+
+    UnicodeDecodeError
+        If the request or settings file cannot be decoded as UTF-8.
+
+    KeyError
+        If a required request/settings field, anatomy index or structure
+        label is missing.
+
+    TypeError, AttributeError
+        If request or settings containers or field values have incompatible types.
+
+    nibabel.filebasedimages.ImageFileError
+        If a CT or mask file is empty or its image format cannot be recognized.
+
+    nibabel.spatialimages.HeaderDataError
+        If an input or output image header is invalid.
+
+    nibabel.orientations.OrientationError
+        If image axes cannot be reoriented.
+
+    numpy.linalg.LinAlgError
+        If an image affine decomposition fails.
 
     ValueError
-        If an input image, target, plan, or calculated dose is invalid.
+        If settings, an input image, target, plan or calculated dose is invalid,
+        or scenario/label indices cannot be converted to integers.
 
     RuntimeError
-        If OpenTPS is unavailable or plan/dose calculation fails.
+        If plan optimization fails or the exported plan file is absent.
+
+    Notes
+    -----
+    OpenTPS and its native dependencies are imported before this function is
+    called; import failures occur at module import time. Errors from OpenTPS
+    calibration readers and MCsquare are propagated without wrapping.
     """
 
     # The parent process passes file paths and planning choices through JSON

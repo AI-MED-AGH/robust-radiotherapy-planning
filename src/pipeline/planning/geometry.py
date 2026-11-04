@@ -106,8 +106,20 @@ def load_ct(path: Path) -> Any:
 
     Raises
     ------
-    FileNotFoundError
-        If the input file does not exist.
+    OSError
+        If the input file is missing, inaccessible or cannot be read.
+
+    nibabel.filebasedimages.ImageFileError
+        If the input file is empty or its image format cannot be recognized.
+
+    nibabel.spatialimages.HeaderDataError
+        If the input image header is invalid.
+
+    nibabel.orientations.OrientationError
+        If the CT axes cannot be reoriented to canonical orientation.
+
+    numpy.linalg.LinAlgError
+        If the affine decomposition used to determine orientation fails.
 
     ValueError
         If CT values are not finite and three-dimensional, or the canonical
@@ -181,8 +193,17 @@ def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
 
     Raises
     ------
-    FileNotFoundError
-        If the label-map file does not exist.
+    OSError
+        If the label-map file is missing, inaccessible or cannot be read.
+
+    nibabel.filebasedimages.ImageFileError
+        If the label-map file is empty or its image format cannot be recognized.
+
+    nibabel.spatialimages.HeaderDataError
+        If the input image header is invalid.
+
+    numpy.linalg.LinAlgError
+        If resampling requires inverting a singular reference affine.
 
     ValueError
         If the label map is not three-dimensional, contains non-finite values,

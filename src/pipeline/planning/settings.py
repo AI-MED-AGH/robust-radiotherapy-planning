@@ -115,6 +115,42 @@ class OpenTPSSettings:
 
     @classmethod
     def load(cls, path: Path) -> "OpenTPSSettings":
+        """
+        Read and validate JSON settings, resolving machine paths beside the file.
+
+        Parameters
+        ----------
+        path : Path
+            UTF-8 JSON settings file.
+
+        Returns
+        -------
+        OpenTPSSettings
+            Validated settings with resolved machine paths and integer OAR labels.
+
+        Raises
+        ------
+        OSError
+            If the settings file cannot be read or a machine-data path is missing.
+
+        json.JSONDecodeError
+            If the settings file is not valid JSON.
+
+        UnicodeDecodeError
+            If the settings file cannot be decoded as UTF-8.
+
+        KeyError
+            If a required machine-path field is missing.
+
+        TypeError, AttributeError
+            If settings containers or field values have incompatible types,
+            or constructor arguments are missing or unknown.
+
+        ValueError
+            If an OAR label cannot be converted to an integer or settings fail
+            ``validate`` checks.
+        """
+
         with path.open(encoding="utf-8") as stream:
             values = json.load(stream)
         for key in ("beam_model_path", "ct_calibration_dir"):
