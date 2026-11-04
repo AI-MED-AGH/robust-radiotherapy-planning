@@ -540,8 +540,6 @@ class MaisiTestingConfig:
             self.stage in {"all", "evaluate", "dose-evaluate"} and self.generate_robust_doses
         )
         if needs_planning:
-            if self.opentps_config_path is None:
-                raise ValueError("Robust dose generation requires --opentps-config")
             if not self.opentps_config_path.is_file():
                 raise FileNotFoundError(f"OpenTPS configuration does not exist: {self.opentps_config_path}")
         if needs_planning and not self.ct_root.is_dir():

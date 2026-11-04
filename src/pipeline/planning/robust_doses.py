@@ -364,7 +364,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     Raises
     ------
     ValueError
-        If OpenTPS configuration is missing or invalid, required patient
+        If OpenTPS settings are invalid, required patient
         inputs are invalid, an optimization structure is empty, or tensor
         shapes or generated HU values are invalid.
 
@@ -406,8 +406,6 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         or its decomposition does not converge.
     """
 
-    if config.opentps_config_path is None:
-        raise ValueError("Provide --opentps-config with machine, prescription and scenario settings")
     settings = OpenTPSSettings.load(config.opentps_config_path)
     inputs = collect_planning_inputs(config, settings)
     run_id = uuid.uuid4().hex
