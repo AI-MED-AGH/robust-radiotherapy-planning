@@ -3,7 +3,6 @@ from typing import Any
 
 import nibabel as nib
 import numpy as np
-from nibabel.processing import resample_from_to
 from numpy.typing import NDArray
 
 
@@ -56,32 +55,39 @@ def canonical_image(image: Any) -> Any:
     return nib.as_closest_canonical(image)  # type: ignore[no-untyped-call]
 
 
-def resample_to_grid(image: Any, reference: Any, *, order: int) -> Any:
+def grid_overlap_slices(source: Any, reference: Any) -> tuple[tuple[slice, ...], tuple[slice, ...]]:
+    """Return matching voxel slices for grids differing only by an integer offset.
+
+    Require equal voxel spacing and axis directions. Cropping and padding are
+    represented by slices over the shared physical extent; no interpolation or
+    affine modification is performed.
+
+    Raises
+    ------
+    ValueError
+        If grids are not 3D, their affines are invalid, spacing or directions
+        differ, origins differ by fractional voxels, or there is no overlap.
+    numpy.linalg.LinAlgError
+        If the reference affine has a singular spatial matrix.
     """
-    Resample an image onto a reference voxel grid using their world affines.
-
-    Parameters
-    ----------
-    image : nibabel.spatialimages.SpatialImage
-        Source image to sample. Its world-coordinate system and units must
-        match those of ``reference``.
-
-    reference : nibabel.spatialimages.SpatialImage
-        Image supplying the output shape and voxel-to-world affine.
-
-    order : int
-        Spline interpolation order from 0 to 5. Use 0 for categorical labels
-        or masks and 1 for linear interpolation of continuous CT values.
-
-    Returns
-    -------
-    aligned : nibabel.spatialimages.SpatialImage
-        Resampled image on the reference grid. Locations outside the source
-        field of view are filled with zero. This aligns grids using existing
-        affines; it does not estimate an anatomical registration.
-    """
-
-    return resample_from_to(image, (reference.shape, reference.affine), order=order)  # type: ignore[no-untyped-call]
+    if len(source.shape) != 3 or len(reference.shape) != 3:
+        raise ValueError("Grid copying requires two 3D images")
+    for image in (source, reference):
+        if image.affine.shape != (4, 4) or not np.isfinite(image.affine).all():
+            raise ValueError("Grid copying requires finite 4-by-4 affines")
+    if not np.allclose(source.affine[:3, :3], reference.affine[:3, :3], rtol=0, atol=1e-6):
+        raise ValueError("Grid spacing and axis directions must match; resampling is disabled")
+    offset = np.linalg.solve(reference.affine[:3, :3], source.affine[:3, 3] - reference.affine[:3, 3])
+    if not np.allclose(offset, np.rint(offset), rtol=0, atol=1e-4):
+        raise ValueError("Grid origins must differ by whole voxels; resampling is disabled")
+    shift = np.rint(offset).astype(np.int64)
+    start = np.maximum(shift, 0)
+    stop = np.minimum(shift + np.asarray(source.shape), reference.shape)
+    if np.any(stop <= start):
+        raise ValueError("Source and reference grids do not overlap")
+    source_slices = tuple(slice(int(a), int(b)) for a, b in zip(start - shift, stop - shift, strict=True))
+    reference_slices = tuple(slice(int(a), int(b)) for a, b in zip(start, stop, strict=True))
+    return source_slices, reference_slices
 
 
 def load_ct(path: Path) -> Any:

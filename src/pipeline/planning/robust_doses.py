@@ -21,12 +21,12 @@ from src.pipeline.helpers.helpers_structures import (
     _warp_planning_mask_to_generated_ct,
 )
 from src.pipeline.planning.geometry import (
+    grid_overlap_slices,
     labels_on_grid,
     load_ct,
     make_nifti,
     mask_image,
     pipeline_grid,
-    resample_to_grid,
 )
 from src.pipeline.planning.settings import OpenTPSSettings
 
@@ -237,12 +237,11 @@ def _generated_anatomy(
     """
     Build a full CT and deformed structure masks for one generated anatomy.
 
-    The generated HU patch is resampled onto the full planning CT grid using
-    linear interpolation. Planning CT values outside the patch coverage are
-    retained to preserve anatomy along beam paths. Planning masks are
-    registered to the generated patch, resampled with nearest-neighbour
-    interpolation, and combined with the original masks outside coverage.
-    Registration is recomputed for this call without using evaluation caches.
+    The generated HU patch is copied into the full planning CT using exact
+    voxel slices. Grids must have matching spacing and axis directions with
+    whole-voxel offsets. Planning values outside the patch are retained.
+    Masks are cropped/padded by copying, deformed by the existing registration
+    workflow, then copied back into the full grid without grid interpolation.
 
     Parameters
     ----------
@@ -279,7 +278,8 @@ def _generated_anatomy(
     ValueError
         If the generated tensor has an incorrect shape, nonfinite or
         out-of-range HU values, its dictionary lacks an ``image`` key, or a
-        warped mask has an incorrect shape.
+        warped mask has an incorrect shape, or grids cannot be matched by
+        whole-voxel copying with equal spacing and axis directions.
 
     OSError
         If the generated tensor file is missing or cannot be read.
@@ -293,7 +293,7 @@ def _generated_anatomy(
         fails.
 
     numpy.linalg.LinAlgError
-        If resampling requires inverting a singular reference affine.
+        If grid validation requires solving a singular reference affine.
     """
 
     generated = _load_tensor(path)
@@ -303,10 +303,10 @@ def _generated_anatomy(
         raise ValueError(f"Generated CT values are outside the configured HU range: {path}")
     # Retain uncropped planning anatomy along the beam path outside the model's
     # field of view. Only the generated patch replaces the corresponding CT.
-    patch = make_nifti(generated.numpy(), grid.affine)
-    coverage = np.asarray(resample_to_grid(mask_image(np.ones(grid.shape), grid), planning, order=0).dataobj) > 0
-    warped_patch = np.asarray(resample_to_grid(patch, planning, order=1).dataobj)
-    image = make_nifti(np.where(coverage, warped_patch, np.asarray(planning.dataobj)), planning.affine)
+    patch_slices, full_slices = grid_overlap_slices(grid, planning)
+    full_ct = planning.get_fdata(dtype=np.float32).copy()
+    full_ct[full_slices] = generated.numpy()[patch_slices]
+    image = make_nifti(full_ct, planning.affine)
 
     # Existing evaluation caches are keyed only by filename, so they can be
     # stale after changing the model. Recompute masks for this planning run.
@@ -316,7 +316,10 @@ def _generated_anatomy(
     transform = _register_planning_ct_to_generated_ct(planning_tensor, generated, registration_config)
     warped = {}
     for label, mask in planning_masks.items():
-        patch_mask = np.asarray(resample_to_grid(mask, grid, order=0).dataobj).copy()
+        if mask.shape != planning.shape or not np.allclose(mask.affine, planning.affine, rtol=0, atol=1e-6):
+            raise ValueError(f"Planning structure {label} must match the planning CT grid")
+        patch_mask = np.zeros(grid.shape, dtype=np.uint8)
+        patch_mask[patch_slices] = np.asarray(mask.dataobj)[full_slices]
         warped[label] = _warp_planning_mask_to_generated_ct(
             torch.from_numpy(patch_mask), generated, transform, registration_config
         )
@@ -324,9 +327,9 @@ def _generated_anatomy(
     for label, values in warped.items():
         if tuple(values.shape) != grid.shape:
             raise ValueError(f"Warped structure {label} has incorrect grid for {path}")
-        patch_mask = mask_image(values.numpy(), grid)
-        full = np.asarray(resample_to_grid(patch_mask, planning, order=0).dataobj) > 0
-        masks[label] = mask_image(np.where(coverage, full, np.asarray(planning_masks[label].dataobj)), planning)
+        full = np.asarray(planning_masks[label].dataobj).copy()
+        full[full_slices] = values.numpy()[patch_slices]
+        masks[label] = mask_image(full, planning)
     return image, masks
 
 
