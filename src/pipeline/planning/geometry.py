@@ -36,8 +36,9 @@ def canonical_image(image: Any) -> Any:
     Reorder voxel axes into the closest canonical RAS+ orientation.
 
     Axes are permuted or flipped and the affine is updated to preserve each
-    voxel's world position. This does not interpolate values or remove
-    obliquity or shear from the grid.
+    voxel's world position. This does not interpolate values. Any tilt of the
+    voxel grid relative to the anatomical axes (obliquity), or skew between
+    its axes (shear), remains; removing either requires resampling.
 
     Parameters
     ----------
