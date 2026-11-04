@@ -277,8 +277,8 @@ def _generated_anatomy(
     ------
     ValueError
         If the generated tensor has an incorrect shape, nonfinite or
-        out-of-range HU values, its dictionary lacks an ``image`` key, or a
-        warped mask has an incorrect shape, or grids cannot be matched by
+        out-of-range HU values, its dictionary lacks an ``image`` key, or
+        grids cannot be matched by
         whole-voxel copying with equal spacing and axis directions.
 
     OSError
@@ -325,8 +325,6 @@ def _generated_anatomy(
         )
     masks = {}
     for label, values in warped.items():
-        if tuple(values.shape) != grid.shape:
-            raise ValueError(f"Warped structure {label} has incorrect grid for {path}")
         full = np.asarray(planning_masks[label].dataobj).copy()
         full[full_slices] = values.numpy()[patch_slices]
         masks[label] = mask_image(full, planning)
