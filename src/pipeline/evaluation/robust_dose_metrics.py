@@ -118,7 +118,7 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
             mask = torch.from_numpy(labels != 0 if label == 0 else labels == label)
             for metric, value in _clinical_metric_values(dose, mask, config).items():
                 rows.append({**metadata, "structure_label": label, "metric": metric, "value": value})
-            dvh = dose_volume_histogram(dose, mask, config.dose_dvh_bin_width)
+            dvh = dose_volume_histogram(dose, mask, config)
             if not dvh.empty:
                 dvhs.append(dvh.assign(**metadata, structure_label=label))
     frame = pd.DataFrame(rows)
