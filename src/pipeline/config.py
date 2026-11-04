@@ -518,8 +518,10 @@ class MaisiTestingConfig:
         -----
         Preparation requires raw CT directories. Encoding requires the VAE
         checkpoint; generation requires both VAE and rectified-flow checkpoints.
-        Evaluation requires structure and clinical dose directories only when
-        their corresponding workflows are enabled. ``all`` combines these
+        Evaluation requires structures when structure or dose metrics are enabled.
+        Dose metrics require a clinical dose root only when no robust-dose
+        manifest exists and robust-dose generation is not requested.
+        ``all`` combines these
         requirements. Preparation creates its split from CT paths, so an
         existing split JSON or default weights directory is not required.
         Intermediate files are checked separately before outputs are created.
@@ -560,7 +562,12 @@ class MaisiTestingConfig:
             and not (self.robust_dose_dir / "manifest.json").is_file()
             and not self.dose_root.exists()
         ):
-            raise FileNotFoundError(f"DOSES root does not exist: {self.dose_root}")
+            raise FileNotFoundError(
+                "Dose evaluation has neither an existing robust-dose manifest "
+                f"({self.robust_dose_dir / 'manifest.json'}) nor an existing clinical dose root "
+                f"({self.dose_root}), and robust-dose generation is disabled. "
+                "Provide one of these inputs or enable robust-dose generation."
+            )
 
         # Preparation builds the split from raw CTs; it does not read the JSON.
         # Check checkpoint files directly so custom paths need no default weights directory.
