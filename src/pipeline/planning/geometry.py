@@ -164,10 +164,15 @@ def pipeline_grid(planning_image: Any, shape: tuple[int, int, int]) -> Any:
 
     original_shape = np.asarray(planning_image.shape)
     target_shape = np.asarray(shape)
+    # Match MONAI SpatialPad: an odd extra voxel goes on the trailing side
     padding_before = np.maximum(target_shape - original_shape, 0) // 2
     padded_shape = np.maximum(original_shape, target_shape)
+    # Match CenterSpatialCrop: floor(size / 2) - floor(roi_size / 2)
+    # Keep the divisions separate: e.g. cropping 6 to 3 starts at 2, not 1
     crop_before = padded_shape // 2 - target_shape // 2
     affine = planning_image.affine.copy()
+    # Output index j corresponds to original index j + crop_before - padding_before
+    # For world = M @ index + origin, this changes origin by M @ that offset
     affine[:3, 3] += affine[:3, :3] @ (crop_before - padding_before)
     return make_nifti(np.zeros(shape, dtype=np.uint8), affine)
 
