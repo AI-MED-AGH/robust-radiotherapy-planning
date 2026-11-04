@@ -3,17 +3,27 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from opentps.core.data.images import CTImage, ROIMask
-from opentps.core.data.plan import ProtonPlanDesign
-from opentps.core.io.dicomIO import writeRTPlan
-from opentps.core.io.mcsquareIO import readBDL
-from opentps.core.io.scannerReader import readScanner
-from opentps.core.processing.doseCalculation.protons.mcsquareDoseCalculator import MCsquareDoseCalculator
-from opentps.core.processing.planOptimization.objectives.doseFidelity import DoseFidelity
-from opentps.core.processing.planOptimization.objectives.dosimetricObjectives._DMax import DMax
-from opentps.core.processing.planOptimization.objectives.dosimetricObjectives._DUniform import DUniform
-from opentps.core.processing.planOptimization.objectives.robustFunctions.robustWorstCase import RobustWorstCase
-from opentps.core.processing.planOptimization.objectives.weightedSum import WeightedSum
+from opentps.core.data.images import CTImage, ROIMask  # type: ignore[import-untyped]
+from opentps.core.data.plan import ProtonPlanDesign  # type: ignore[import-untyped]
+from opentps.core.io.dicomIO import writeRTPlan  # type: ignore[import-untyped]
+from opentps.core.io.mcsquareIO import readBDL  # type: ignore[import-untyped]
+from opentps.core.io.scannerReader import readScanner  # type: ignore[import-untyped]
+from opentps.core.processing.doseCalculation.protons.mcsquareDoseCalculator import (  # type: ignore[import-untyped]
+    MCsquareDoseCalculator,
+)
+from opentps.core.processing.planOptimization.objectives.doseFidelity import (  # type: ignore[import-untyped]
+    DoseFidelity,
+)
+from opentps.core.processing.planOptimization.objectives.dosimetricObjectives._DMax import (  # type: ignore[import-untyped]
+    DMax,
+)
+from opentps.core.processing.planOptimization.objectives.dosimetricObjectives._DUniform import (  # type: ignore[import-untyped]
+    DUniform,
+)
+from opentps.core.processing.planOptimization.objectives.robustFunctions.robustWorstCase import (  # type: ignore[import-untyped]
+    RobustWorstCase,
+)
+from opentps.core.processing.planOptimization.objectives.weightedSum import WeightedSum  # type: ignore[import-untyped]
 from scipy.optimize import minimize
 
 from src.pipeline.planning.geometry import dose_to_nifti, opentps_image

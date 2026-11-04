@@ -226,7 +226,7 @@ def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
     if values.ndim != 3 or not np.isfinite(values).all() or not np.allclose(values, np.rint(values)):
         raise ValueError(f"Structure map must contain finite integer 3D labels: {path}")
     aligned = canonical_image(image)
-    # Axis reordering preserves labels; a different physical grid is an input error.
+    # Axis reordering preserves labels; a different physical grid is an input error
     if aligned.shape != reference.shape or not np.allclose(aligned.affine, reference.affine, rtol=0, atol=1e-3):
         raise ValueError(f"Structure map grid does not match the reference CT grid: {path}")
     return np.asarray(aligned.dataobj).round().astype(np.int16)
