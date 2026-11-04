@@ -2,18 +2,21 @@ import gc
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import torch
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
 
+_Task = TypeVar("_Task")
+_Result = TypeVar("_Result")
 
-def _run_evaluation_tasks[Task, Result](
-    tasks: Sequence[Task],
-    prepare: Callable[[Task], Result],
-    calculate_metrics: Callable[[Task, Result], None],
+
+def _run_evaluation_tasks(  # noqa: UP047
+    tasks: Sequence[_Task],
+    prepare: Callable[[_Task], _Result],
+    calculate_metrics: Callable[[_Task, _Result], None],
     device: str,
     description: str,
 ) -> None:
