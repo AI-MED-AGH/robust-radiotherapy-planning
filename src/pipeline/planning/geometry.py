@@ -179,7 +179,7 @@ def pipeline_grid(planning_image: Any, shape: tuple[int, int, int]) -> Any:
 
 def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
     """
-    Load a structure label map and resample it onto a reference grid.
+    Load a structure label map and require it to match a canonical CT grid.
 
     Parameters
     ----------
@@ -188,14 +188,15 @@ def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
         values are expected to fit in int16; their range is not checked here.
 
     reference : nibabel.spatialimages.SpatialImage
-        Image defining the output shape and affine in the same world frame.
+        Canonical RAS+ CT defining the required shape and affine, normally
+        returned by ``load_ct``.
 
     Returns
     -------
     labels : numpy.ndarray
-        Int16 label array with the reference shape. Nearest-neighbour sampling
-        preserves categorical labels, and out-of-bounds locations receive
-        background label zero. The array itself does not retain an affine.
+        Int16 label array with the reference shape. Axes may be permuted or
+        flipped into canonical orientation, without interpolation. Grid
+        mismatches are rejected. The array itself does not retain an affine.
 
     Raises
     ------
@@ -208,19 +209,26 @@ def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
     nibabel.spatialimages.HeaderDataError
         If the input image header is invalid.
 
+    nibabel.orientations.OrientationError
+        If the label-map axes cannot be reoriented to canonical orientation.
+
     numpy.linalg.LinAlgError
-        If resampling requires inverting a singular reference affine.
+        If the affine decomposition used to determine orientation fails.
 
     ValueError
         If the label map is not three-dimensional, contains non-finite values,
-        or its values are not close to integers under ``numpy.allclose``.
+        its values are not close to integers under ``numpy.allclose``, or its
+        canonical shape or affine does not match the reference grid.
     """
 
     image: Any = nib.load(str(path))
     values = image.get_fdata()
     if values.ndim != 3 or not np.isfinite(values).all() or not np.allclose(values, np.rint(values)):
         raise ValueError(f"Structure map must contain finite integer 3D labels: {path}")
-    aligned = resample_to_grid(image, reference, order=0)
+    aligned = canonical_image(image)
+    # Axis reordering preserves labels; a different physical grid is an input error.
+    if aligned.shape != reference.shape or not np.allclose(aligned.affine, reference.affine, rtol=0, atol=1e-3):
+        raise ValueError(f"Structure map grid does not match the reference CT grid: {path}")
     return np.asarray(aligned.dataobj).round().astype(np.int16)
 
 
