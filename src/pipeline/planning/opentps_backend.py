@@ -129,8 +129,6 @@ class OpenTPSBackend:
         return plan
 
     def set_grid(self, ct: Any) -> None:
-        # Explicitly reset all three: a plan design otherwise retains the
-        # planning grid when computeDose is called with a different real CT.
         """
         Reset the calculator's dose-scoring geometry to the current CT.
 
