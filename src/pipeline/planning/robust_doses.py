@@ -308,8 +308,7 @@ def _generated_anatomy(
     full_ct[full_slices] = generated.numpy()[patch_slices]
     image = make_nifti(full_ct, planning.affine)
 
-    # Existing evaluation caches are keyed only by filename, so they can be
-    # stale after changing the model. Recompute masks for this planning run.
+    # Use the patch grid's physical voxel spacing for registration
     registration_config = copy.copy(config)
     voxel_spacing = grid.header.get_zooms()
     registration_config.spacing = (float(voxel_spacing[0]), float(voxel_spacing[1]), float(voxel_spacing[2]))
