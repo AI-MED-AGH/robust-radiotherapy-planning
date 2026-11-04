@@ -47,12 +47,6 @@ class MaisiTestingConfig:
     data_root : Path
         Root directory containing project data.
 
-    path_overrides : dict[str, Path] | None
-        Optional overrides for derived path attributes, keyed by attribute name
-        (for example, ``{"dose_root": Path("custom/doses")}``). Derived paths
-        are not direct constructor arguments. Overrides are applied before
-        input validation and output directory creation.
-
     output_root : Path
         Root directory for all pipeline outputs.
 
@@ -124,19 +118,25 @@ class MaisiTestingConfig:
         Integer label values identifying the structures to include in
         structure-based metrics.
 
+    structure_registration_iterations : int
+        Number of iterations used by the demons registration filter when
+        aligning fixed and generated CTs for structure evaluation.
+
+    structure_registration_sigma : float
+        Gaussian smoothing standard deviation used by the demons registration
+        filter during structure evaluation.
+
+    structure_registration_shrink_factors : list[float]
+        Per-level shrink factors used for multiscale structure registration,
+        ordered from coarse to fine resolution.
+
+    structure_registration_smoothing_sigmas : list[float]
+        Per-level smoothing sigmas used for multiscale structure registration,
+        ordered from coarse to fine resolution.
+
     use_dose_metrics : bool
         Parent switch for all dose evaluation, including robust recalculations.
         Dose generation is requested independently through generate_robust_doses.
-
-    generate_robust_doses : bool
-        Generate OpenTPS doses when evaluate_doses is called, independently
-        of use_dose_metrics. Defaults to false for every stage.
-        Explicit generation stages also request generation.
-
-    opentps_config_path : Path
-        Machine, prescription and scenario settings required for generation.
-        Defaults to configs/opentps.json. Providing a path alone does not enable
-        generation or evaluation. Customize it through path_overrides.
 
     use_base_dose_smoke_test : bool
         Whether to evaluate the clinical fraction-1 dose on the original and
@@ -164,21 +164,10 @@ class MaisiTestingConfig:
         Whether dose metrics should try to warp planning structures into
         generated-dose space when a matching generated CT is available.
 
-    structure_registration_iterations : int
-        Number of iterations used by the demons registration filter when
-        aligning fixed and generated CTs for structure evaluation.
-
-    structure_registration_sigma : float
-        Gaussian smoothing standard deviation used by the demons registration
-        filter during structure evaluation.
-
-    structure_registration_shrink_factors : list[float]
-        Per-level shrink factors used for multiscale structure registration,
-        ordered from coarse to fine resolution.
-
-    structure_registration_smoothing_sigmas : list[float]
-        Per-level smoothing sigmas used for multiscale structure registration,
-        ordered from coarse to fine resolution.
+    generate_robust_doses : bool
+        Generate OpenTPS doses when evaluate_doses is called, independently
+        of use_dose_metrics. Defaults to false for every stage.
+        Explicit generation stages also request generation.
 
     vae_config : dict | None
         VAE architecture configuration.
@@ -191,6 +180,12 @@ class MaisiTestingConfig:
     scheduler_config : dict | None
         Sampling scheduler configuration.
         If None, a default configuration is used.
+
+    path_overrides : dict[str, Path] | None
+        Optional overrides for derived path attributes, keyed by attribute name
+        (for example, ``{"dose_root": Path("custom/doses")}``). Derived paths
+        are not direct constructor arguments. Overrides are applied before
+        input validation and output directory creation.
 
     validate_paths : bool
         Whether filesystem paths should be validated during initialization.
@@ -217,6 +212,11 @@ class MaisiTestingConfig:
     data_dict_path : Path
         Path to the dataset split JSON file.
 
+    opentps_config_path : Path
+        Machine, prescription and scenario settings required for generation.
+        Defaults to configs/opentps.json. Providing a path alone does not enable
+        generation or evaluation. Customize it through path_overrides.
+
     processed_ct_dir : Path
         Directory containing preprocessed CT data.
 
@@ -226,15 +226,18 @@ class MaisiTestingConfig:
     generated_ct_dir : Path
         Directory containing generated CT images.
 
-    metrics_dir : Path
-        Directory containing evaluation metrics.
-
     predicted_dose_dir : Path
         Directory containing model-predicted dose distributions to compare
         against reference doses.
 
+    robust_dose_dir : Path
+        Directory containing generated OpenTPS plans, doses and their manifest.
+
     warped_structure_cache_dir : Path
         Directory for mask files indexed only during the current evaluation run.
+
+    metrics_dir : Path
+        Directory containing evaluation metrics.
 
     logs_dir : Path
         Directory containing pipeline logs.
