@@ -222,7 +222,7 @@ def parse_args() -> argparse.Namespace:
         "--generate-robust-doses",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Generate OpenTPS doses before evaluation (default: disabled); uses the configured OpenTPS settings",
+        help="Generate OpenTPS doses before evaluation (default: disabled; all always generates doses)",
     )
     parser.add_argument(
         "--opentps-config",
@@ -345,7 +345,7 @@ def run_stage(
     - dose-evaluate: calculate dose metrics
     - dose-generate: generate OpenTPS plans and scenario/real-CT doses
     - all: prepare, encode, generate CTs, then evaluate CTs and generate/evaluate doses
-      (dose scoring is enabled by default; generation requires --generate-robust-doses)
+      (dose scoring is enabled by default; generation always runs regardless of --generate-robust-doses)
 
     Parameters
     ----------

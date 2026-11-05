@@ -166,8 +166,8 @@ class MaisiTestingConfig:
 
     generate_robust_doses : bool
         Generate OpenTPS doses when evaluate_doses is called, independently
-        of use_dose_metrics. Defaults to false for every stage.
-        Explicit generation stages also request generation.
+        of use_dose_metrics. Defaults to false; ``all`` and ``dose-generate``
+        always generate doses regardless of this flag.
 
     vae_config : dict | None
         VAE architecture configuration.
@@ -536,8 +536,8 @@ class MaisiTestingConfig:
         if self.stage in {"prepare", "all"} and not self.ct_root.exists():
             raise FileNotFoundError(f"CT root does not exist: {self.ct_root}")
 
-        needs_planning = self.stage == "dose-generate" or (
-            self.stage in {"all", "evaluate", "dose-evaluate"} and self.generate_robust_doses
+        needs_planning = self.stage in {"all", "dose-generate"} or (
+            self.stage in {"evaluate", "dose-evaluate"} and self.generate_robust_doses
         )
         if needs_planning:
             if not self.opentps_config_path.is_file():

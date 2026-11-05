@@ -35,7 +35,7 @@ def evaluate_doses(
     The dose metrics switch controls all scoring. Evaluate available robust
     doses from their completed manifest, or run the basic supplied-dose
     workflows when no robust doses are available. Generation runs first when
-    requested, independently of whether evaluation is enabled. OpenTPS settings are inputs
+    requested or when running ``all``, independently of whether evaluation is enabled. OpenTPS settings are inputs
     to generation and do not select which doses are evaluated.
 
     Parameters
@@ -49,7 +49,7 @@ def evaluate_doses(
         Reusing this cache avoids repeating planning-to-generated registration.
     """
 
-    if config.generate_robust_doses:
+    if config.stage == "all" or config.generate_robust_doses:
         logger.info("Generating robust doses with OpenTPS")
         generate_robust_doses(config)
 

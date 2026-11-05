@@ -26,14 +26,14 @@ Use the same `--robust-dose-dir` for both commands if you override the default. 
 To run the complete pipeline, including dose generation and evaluation:
 
 ```
-uv run python -m src.pipeline.cli all --cts-per-patient 5 --generate-robust-doses
+uv run python -m src.pipeline.cli all --cts-per-patient 5
 ```
 
 Replace `5` with the number of CT variants to generate per patient for evaluation. The command uses the default model checkpoint and OpenTPS configuration paths; use `--rflow-weight-path` or `--opentps-config` only to override them.
 
-Dose evaluation is enabled by default; use `--no-dose-metrics` to skip it. Dose generation is disabled by default, including for `all`; enable it with `--generate-robust-doses` or run the explicit `dose-generate` stage.
+Dose evaluation is enabled by default; use `--no-dose-metrics` to skip it. The `all` stage always generates robust doses, even with `--no-generate-robust-doses` or `--no-dose-metrics`. For standalone evaluation stages, generation is disabled by default; enable it with `--generate-robust-doses` or run the explicit `dose-generate` stage.
 
-To evaluate the dataset's existing fraction-1 doses without OpenTPS settings, run `dose-evaluate`, or run `all` for the full CT pipeline plus dose evaluation. If a robust-dose manifest exists, evaluation uses those saved doses instead.
+To evaluate the dataset's existing fraction-1 doses without OpenTPS settings, run `dose-evaluate`. If a robust-dose manifest exists, evaluation uses those saved doses instead.
 
 ## Outputs
 
