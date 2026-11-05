@@ -7,6 +7,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -408,7 +409,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
 
     settings = OpenTPSSettings.load(config.opentps_config_path)
     inputs = collect_planning_inputs(config, settings)
-    run_id = uuid.uuid4().hex
+    run_id = f"{datetime.now(UTC):%Y-%m-%d_%H-%M-%SZ}_{uuid.uuid4().hex}"
     run_dir = config.robust_dose_dir / f"run-{run_id}"
     run_dir.mkdir(parents=True)
     settings_snapshot = (run_dir / "settings.json").resolve()
