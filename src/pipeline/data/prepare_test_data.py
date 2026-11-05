@@ -3,19 +3,18 @@ from typing import Any
 
 import torch
 from monai.transforms import (  # type: ignore[attr-defined]
-    CenterSpatialCropd,
     Compose,
     EnsureChannelFirstd,
     EnsureTyped,
     LoadImaged,
     Orientationd,
     ScaleIntensityRanged,
-    SpatialPadd,
 )
 from tqdm import tqdm
 
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.data.ct_transforms import ct_pad_and_crop
 from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _extract_all_ct_paths
 
@@ -52,16 +51,7 @@ def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:
                 b_max=1,
                 clip=True,
             ),
-            SpatialPadd(
-                keys="image",
-                spatial_size=config.target_image_size,
-                mode="constant",
-                constant_values=0,
-            ),
-            CenterSpatialCropd(
-                keys="image",
-                roi_size=config.target_image_size,
-            ),
+            *ct_pad_and_crop(config.target_image_size),
             EnsureTyped(keys="image", dtype=torch.float32),
         ]
     )

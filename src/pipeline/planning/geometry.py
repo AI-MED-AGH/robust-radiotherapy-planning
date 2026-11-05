@@ -3,7 +3,10 @@ from typing import Any
 
 import nibabel as nib
 import numpy as np
+from monai.data.meta_tensor import MetaTensor
 from numpy.typing import NDArray
+
+from src.pipeline.data.ct_transforms import ct_pad_and_crop
 
 
 def make_nifti(values: Any, affine: Any) -> Any:
@@ -168,19 +171,12 @@ def pipeline_grid(planning_image: Any, shape: tuple[int, int, int]) -> Any:
         affine. This image describes geometry only; it contains no CT values.
     """
 
-    original_shape = np.asarray(planning_image.shape)
-    target_shape = np.asarray(shape)
-    # Match MONAI SpatialPad: an odd extra voxel goes on the trailing side
-    padding_before = np.maximum(target_shape - original_shape, 0) // 2
-    padded_shape = np.maximum(original_shape, target_shape)
-    # Match CenterSpatialCrop: floor(size / 2) - floor(roi_size / 2)
-    # Keep the divisions separate: e.g. cropping 6 to 3 starts at 2, not 1
-    crop_before = padded_shape // 2 - target_shape // 2
-    affine = planning_image.affine.copy()
-    # Output index j corresponds to original index j + crop_before - padding_before
-    # For world = M @ index + origin, this changes origin by M @ that offset
-    affine[:3, 3] += affine[:3, :3] @ (crop_before - padding_before)
-    return make_nifti(np.zeros(shape, dtype=np.uint8), affine)
+    dummy = MetaTensor(np.zeros((1, *planning_image.shape), dtype=np.uint8), affine=planning_image.affine)
+    pad, crop = ct_pad_and_crop(shape)
+    grid = crop(pad({"image": dummy}))["image"]
+    if not isinstance(grid, MetaTensor):
+        raise ValueError("Planning grid requires MONAI affine metadata tracking")
+    return make_nifti(grid[0].numpy(), grid.affine.numpy())
 
 
 def labels_on_grid(path: Path, reference: Any) -> NDArray[np.int16]:
