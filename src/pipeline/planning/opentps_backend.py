@@ -75,8 +75,7 @@ class OpenTPSBackend:
             model paths. This constructor does not call ``settings.validate``.
 
         simulation_dir : Path
-            Working directory assigned to MCsquare as an absolute path. This
-            constructor does not explicitly create the directory.
+            Working directory created for MCsquare and assigned as an absolute path.
 
         Returns
         -------
@@ -92,7 +91,9 @@ class OpenTPSBackend:
         self.calculator = MCsquareDoseCalculator()
         self.calculator.ctCalibration = self.calibration
         self.calculator.beamModel = readBDL(str(settings.beam_model_path))
-        self.calculator.simulationDirectory = str(simulation_dir.resolve())
+        simulation_dir = simulation_dir.resolve()
+        simulation_dir.mkdir(parents=True, exist_ok=True)
+        self.calculator.simulationDirectory = str(simulation_dir)
 
     def build_plan(self, ct: Any, target: Any) -> Any:
         """
