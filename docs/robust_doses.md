@@ -4,7 +4,7 @@ This workflow optimizes proton plans on generated CT scenarios, then recalculate
 
 ## Inputs
 
-Run `uv sync` in the project's Python 3.12 environment. You need raw CT NIfTIs in HU, matching structure label maps for each real fraction, prepared CT tensors, and generated HU tensors. CTs and structures must share a patient coordinate frame.
+Run `uv sync` in the project's Python 3.12 environment. You need raw CT NIfTIs in HU, prepared CT tensors, and generated HU tensors. The planning CT requires a matching structure label map for optimization. Follow-up CTs without a matching map are skipped during dose recalculation and evaluation. CTs and structures must share a patient coordinate frame.
 
 Use the saved planning settings in `configs/opentps.json` as the shared setup for comparing generation models. Keep the prescription, beam angles, target and OAR definitions, optimization settings, and scenario sets fixed across model comparisons. This setup is intended for realistic dose-based evaluation of generated CTs, rather than patient-specific treatment planning.
 

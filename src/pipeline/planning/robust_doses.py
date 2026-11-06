@@ -145,11 +145,16 @@ def _nifti(root: Path, patient: str, stem: str) -> Path:
 
     Raises
     ------
+    FileNotFoundError
+        If neither extension exists.
+
     ValueError
-        If neither extension exists or both extensions exist.
+        If both extensions exist.
     """
 
     matches = [path for suffix in (".nii.gz", ".nii") if (path := root / patient / f"{stem}{suffix}").is_file()]
+    if not matches:
+        raise FileNotFoundError(f"No NIfTI for {patient}/{stem} in {root}")
     if len(matches) != 1:
         raise ValueError(f"Expected exactly one NIfTI for {patient}/{stem} in {root}; found {len(matches)}")
     return matches[0]
@@ -160,7 +165,8 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
     Collect planning inputs for the patients and fractions in the prepared split.
 
     Prepared CT tensors determine which original CTs and structure maps are
-    included. Generated tensors are matched by ``<patient>_gen_<index>.pt``;
+    included. Follow-up CTs without a structure map are skipped.
+    Generated tensors are matched by ``<patient>_gen_<index>.pt``;
     an ``"all"`` scenario selection expands to all available variant indices.
     This function resolves paths without loading image or tensor contents.
 
@@ -184,8 +190,10 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
     ValueError
         If no prepared CTs exist, a patient lacks exactly one planning CT or
         at least one follow-up CT, generated indices are duplicated or missing,
-        an ``"all"`` selection is empty, or an original CT or structure map
-        does not have exactly one matching NIfTI file.
+        an ``"all"`` selection is empty, or a NIfTI match is ambiguous.
+
+    FileNotFoundError
+        If an original CT or the planning structure map is missing.
     """
 
     patients: dict[str, list[Path]] = {}
@@ -220,7 +228,15 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
         real_cts = []
         for path in paths:
             ct = _nifti(config.ct_root, patient, path.stem)
-            structures = _nifti(config.structures_root, patient, path.stem)
+            try:
+                structures = _nifti(config.structures_root, patient, path.stem)
+            except FileNotFoundError:
+                if path == planning[0]:
+                    raise
+                logger.warning(
+                    "Skipping robust dose evaluation for %s: missing structure map in %s", ct, config.structures_root
+                )
+                continue
             real_cts.append((ct, structures))
         planning_ct = _nifti(config.ct_root, patient, planning[0].stem)
         inputs.append(_PatientInputs(patient, planning[0], planning_ct, real_cts, variants, selected))
@@ -341,7 +357,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     to an isolated OpenTPS worker. Each named scenario set produces one plan
     optimized on the planning CT and that set's generated CTs. The fixed plan
     is MCsquare-recalculated on the selected generated CTs and every prepared
-    real fraction, including the planning fraction. Real follow-up scans never
+    real fraction with a structure map, including the planning fraction. Real follow-up scans never
     contribute to plan optimization.
 
     Settings, anatomy files, requests, logs, plans and doses are stored in a
