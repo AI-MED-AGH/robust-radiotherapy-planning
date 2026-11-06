@@ -760,7 +760,8 @@ def _warp_planning_mask_to_generated_ct(
     Returns
     -------
     warped_mask : torch.Tensor
-        Boolean 3D mask in generated CT space.
+        Boolean 3D mask with the same shape as ``generated_ct``, whose grid
+        defines the output geometry through ``SetReferenceImage``.
     """
 
     # The generated CT is used only as the reference grid: size, spacing,

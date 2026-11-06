@@ -42,11 +42,52 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _DoseComparisonData:
     """
-    Store CPU-loaded data for one predicted/reference dose comparison.
+    Store loaded data and status messages for one dose comparison.
 
-    Dose maps and structure labels are loaded on CPU because NIfTI decoding and
-    MONAI transforms are CPU-bound. The metric loop moves only the current
-    comparison to the configured metric device, which keeps GPU memory bounded.
+    Dose and label tensors are loaded on CPU; the metric loop moves only the
+    current comparison to its configured device. A fatal ``warning`` skips the
+    comparison, while ``info_message`` and ``nonfatal_warning`` are reported and
+    metric calculation continues when the required dose tensors are available.
+
+    Attributes
+    ----------
+    pred_path : Path
+        File containing the predicted dose map.
+
+    ref_path : Path
+        File containing the reference dose map.
+
+    pred_dose : torch.Tensor | None
+        Predicted dose on CPU, or ``None`` when loading failed or the dose grids
+        are incompatible.
+
+    ref_dose : torch.Tensor | None
+        Reference dose on CPU, or ``None`` when loading failed or the dose grids
+        are incompatible.
+
+    ref_label_map : torch.Tensor | None
+        Reference structure labels on CPU, used for structure-specific metrics;
+        ``None`` when unavailable.
+
+    pred_masks : dict[int, torch.Tensor] | None
+        Predicted-anatomy masks on CPU, keyed by structure label; ``None`` when
+        no predicted structure masks are available.
+
+    pred_structure_source : str
+        Description of where predicted-anatomy masks came from, or ``"none"``.
+
+    ref_structure_source : str
+        Description of where reference structure labels came from, or ``"none"``.
+
+    info_message : str | None
+        Informational message to report while still evaluating available data.
+
+    nonfatal_warning : str | None
+        Warning to report while continuing with available dose metrics.
+
+    warning : str | None
+        Fatal comparison warning; when present, the evaluator records it and
+        skips this comparison.
     """
 
     pred_path: Path
