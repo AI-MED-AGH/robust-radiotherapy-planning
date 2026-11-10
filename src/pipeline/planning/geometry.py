@@ -3,10 +3,7 @@ from typing import Any
 
 import nibabel as nib
 import numpy as np
-from monai.data.meta_tensor import MetaTensor
 from numpy.typing import NDArray
-
-from src.pipeline.data.ct_transforms import ct_pad_and_crop
 
 
 def make_nifti(values: Any, affine: Any) -> Any:
@@ -170,6 +167,10 @@ def pipeline_grid(planning_image: Any, shape: tuple[int, int, int]) -> Any:
         Zero-filled uint8 image with the tensor's shape and reconstructed
         affine. This image describes geometry only; it contains no CT values.
     """
+    # This runs in the parent pipeline. The OpenTPS worker must avoid loading PyTorch.
+    from monai.data.meta_tensor import MetaTensor
+
+    from src.pipeline.data.ct_transforms import ct_pad_and_crop
 
     dummy = MetaTensor(np.zeros((1, *planning_image.shape), dtype=np.uint8), affine=planning_image.affine)
     pad, crop = ct_pad_and_crop(shape)

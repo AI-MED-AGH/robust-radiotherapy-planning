@@ -1,9 +1,14 @@
 import copy
+import os
+from importlib.metadata import version
+from inspect import getfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from opentps.core.data import SparseBeamlets  # type: ignore[import-untyped]
 from opentps.core.data.images import CTImage, ROIMask  # type: ignore[import-untyped]
+from opentps.core.data.MCsquare import MCsquareConfig  # type: ignore[import-untyped]
 from opentps.core.data.plan import ProtonPlanDesign  # type: ignore[import-untyped]
 from opentps.core.io.dicomIO import writeRTPlan  # type: ignore[import-untyped]
 from opentps.core.io.mcsquareIO import readBDL  # type: ignore[import-untyped]
@@ -25,9 +30,134 @@ from opentps.core.processing.planOptimization.objectives.robustFunctions.robustW
 )
 from opentps.core.processing.planOptimization.objectives.weightedSum import WeightedSum  # type: ignore[import-untyped]
 from scipy.optimize import minimize
+from scipy.sparse import diags
 
 from src.pipeline.planning.geometry import dose_to_nifti, opentps_image
 from src.pipeline.planning.settings import OpenTPSSettings
+
+
+class _BundledMCsquareConfig(MCsquareConfig):  # type: ignore[misc]
+    """
+    Serialize OpenTPS settings with the bundled MCsquare template.
+
+    The calculator supplies the settings and can still override them for each
+    calculation mode through the usual ``MCsquareConfig`` interface.
+    """
+
+    def __init__(self, config: dict[str, Any], template: str) -> None:
+        """
+        Wrap an existing OpenTPS configuration.
+
+        Parameters
+        ----------
+        config : dict[str, Any]
+            Settings dictionary from OpenTPS, shared with this wrapper so that
+            subsequent beamlet and dose settings are included in the output.
+        template : str
+            Release template with uppercase placeholders for MCsquare settings.
+        """
+        self.config = config
+        self._template = template
+
+    def mcsquareFormatted(self) -> str:
+        """
+        Render the current settings as MCsquare's configuration file text.
+
+        Scalar values are written as strings. Vector settings such as scoring
+        origin are written as space-separated components.
+
+        Raises
+        ------
+        KeyError
+            If the configuration has no value for a template placeholder.
+        """
+        values = {
+            key.upper(): " ".join(map(str, value)) if np.ndim(value) > 0 else str(value)
+            for key, value in self.config.items()
+        }
+        return self._template.format_map(values)
+
+
+class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
+    """
+    Adapt the OpenTPS 3.0.1 calculator for the planning worker.
+
+    The adapter uses the release template when the installed wheel omits it,
+    aligns the cached dose path with the worker's simulation directory, and
+    keeps Linux beamlet rescaling sparse.
+    """
+
+    def __init__(self, simulation_dir: Path) -> None:
+        """
+        Bind the calculator to a patient-specific simulation directory.
+
+        Parameters
+        ----------
+        simulation_dir : Path
+            Absolute path to the worker's simulation directory. The calculator
+            creates its MCsquare working directory inside this path.
+
+        Raises
+        ------
+        OSError
+            If a working directory cannot be created or the fallback template
+            is needed and cannot be read.
+        """
+        super().__init__()
+        self.simulationDirectory = str(simulation_dir)
+        # OpenTPS caches this output path before the simulation directory is assigned.
+        self._doseFilePath = str(Path(self._workDir) / "Dose.mhd")
+        self._bundled_template: str | None = None
+        installed_template = Path(getfile(MCsquareConfig)).resolve().with_name("ConfigTemplate.txt")
+        if not installed_template.is_file():
+            # The 3.0.1 wheel omits this file. Load the release template before plan design.
+            bundled_template = Path(__file__).with_name("_opentps_3_0_1") / installed_template.name
+            self._bundled_template = bundled_template.read_text(encoding="utf-8")
+
+    @property
+    def _generalMCsquareConfig(self) -> Any:
+        """
+        Return the base config used by OpenTPS's calculation modes.
+
+        Preserve the values initialized by OpenTPS in either case. If the
+        installed template is missing, wrap the config so the same settings
+        serialize with the bundled template.
+        """
+        config = super()._generalMCsquareConfig
+        if self._bundled_template is None:
+            return config
+        return _BundledMCsquareConfig(config.config, self._bundled_template)
+
+    def _computeBeamletsLinux(self) -> Any:
+        """
+        Run the Linux shared library on the prepared plan and input files.
+
+        Apply OpenTPS's per-spot conversion to dose per monitor unit using a
+        sparse diagonal with storage proportional to the number of spots.
+
+        Returns
+        -------
+        SparseBeamlets
+            Sparse voxel-by-spot dose matrix with the current scoring grid's
+            origin, spacing, and dimensions.
+        """
+        from opentps.core.processing.doseCalculation.protons._utils import (  # type: ignore[import-untyped]
+            MCsquareSharedLib,
+        )
+
+        os.environ["MCsquare_Materials_Dir"] = self._materialFolder
+        n_voxels = int(np.prod(self.scoringGridSize))
+        self._mc2Lib = MCsquareSharedLib(mcsquarePath=self._mcsquareSimuDir)
+        matrix = self._mc2Lib.computeBeamletsSharedLib(self._configFilePath, n_voxels, self._plan.numberOfSpots)
+
+        # The upstream implementation builds a dense square array before converting it to CSC.
+        scaling = diags(self._beamletRescaling(), dtype=np.float32, format="csc")
+        beamlets = SparseBeamlets()
+        beamlets.setUnitaryBeamlets(matrix @ scaling)
+        beamlets.doseOrigin = self.scoringOrigin
+        beamlets.doseSpacing = self.scoringVoxelSpacing
+        beamlets.doseGridSize = self.scoringGridSize
+        return beamlets
 
 
 class OpenTPSBackend:
@@ -61,7 +191,8 @@ class OpenTPSBackend:
     OpenTPS components are imported with this module. Keep this backend in
     the dedicated worker process to avoid mixing its native dependencies with
     PyTorch on Windows. Callers supply validated settings and axis-aligned
-    images with masks on their corresponding anatomical grids.
+    images with masks on their corresponding anatomical grids. The locked
+    OpenTPS 3.0.1 release uses a compatibility subclass of the MCsquare calculator.
     """
 
     def __init__(self, settings: OpenTPSSettings, simulation_dir: Path) -> None:
@@ -88,12 +219,16 @@ class OpenTPSBackend:
         self.CTImage = CTImage
         self.ROIMask = ROIMask
         self.calibration = readScanner(str(settings.ct_calibration_dir))
-        self.calculator = MCsquareDoseCalculator()
-        self.calculator.ctCalibration = self.calibration
-        self.calculator.beamModel = readBDL(str(settings.beam_model_path))
         simulation_dir = simulation_dir.resolve()
         simulation_dir.mkdir(parents=True, exist_ok=True)
-        self.calculator.simulationDirectory = str(simulation_dir)
+        self.calculator: Any
+        if version("opentps-core") == "3.0.1":
+            self.calculator = _OpenTPS301Calculator(simulation_dir)
+        else:
+            self.calculator = MCsquareDoseCalculator()
+            self.calculator.simulationDirectory = str(simulation_dir)
+        self.calculator.ctCalibration = self.calibration
+        self.calculator.beamModel = readBDL(str(settings.beam_model_path))
 
     def build_plan(self, ct: Any, target: Any) -> Any:
         """

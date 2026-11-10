@@ -1,0 +1,5 @@
+ConfigTemplate.txt is from the OpenTPS 3.0.1 release (commit cf849b5b96a85ecb79273a8320c1accfa02519e1).
+It was developed by the OpenTPS consortium initiated by researchers from UCLouvain and IBA s.a.
+This template is distributed under the Apache License, Version 2.0. See LICENSE in this directory.
+
+https://gitlab.com/openmcsquare/opentps/-/blob/cf849b5b96a85ecb79273a8320c1accfa02519e1/opentps_core/opentps/core/data/MCsquare/ConfigTemplate.txt
