@@ -13,7 +13,7 @@ _Task = TypeVar("_Task")
 _Result = TypeVar("_Result")
 
 
-def _run_evaluation_tasks(
+def _run_evaluation_tasks(  # noqa: UP047
     tasks: Sequence[_Task],
     prepare: Callable[[_Task], _Result],
     calculate_metrics: Callable[[_Task, _Result], None],

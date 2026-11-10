@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 def dose_volume_histogram(
     dose: torch.Tensor | np.ndarray,
     mask: torch.Tensor | np.ndarray,
-    bin_width: float,
+    config: MaisiTestingConfig,
 ) -> pd.DataFrame:
     """
     Calculate a cumulative DVH for a masked volume.
@@ -57,9 +57,9 @@ def dose_volume_histogram(
     mask : torch.Tensor | np.ndarray
         Binary structure mask on the same grid as ``dose``.
 
-    bin_width : float
-        Positive spacing between consecutive dose thresholds, in the same
-        units as ``dose``.
+    config : MaisiTestingConfig
+        Pipeline configuration supplying ``dose_dvh_bin_width``, the positive
+        spacing between consecutive dose thresholds in the same units as ``dose``.
 
     Returns
     -------
@@ -70,11 +70,13 @@ def dose_volume_histogram(
     Raises
     ------
     ValueError
-        If ``bin_width`` is not positive or the dose and mask shapes differ.
+        If ``config.dose_dvh_bin_width`` is not positive or the dose and mask
+        shapes differ.
     """
 
+    bin_width = config.dose_dvh_bin_width
     if bin_width <= 0:
-        raise ValueError("`bin_width` must be greater than 0")
+        raise ValueError("`config.dose_dvh_bin_width` must be greater than 0")
 
     structure_dose = _masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
@@ -944,8 +946,8 @@ def calculate_dose_evaluation_metrics(
                         )
                     )
 
-                pred_dvh = dose_volume_histogram(pred_dose, pred_mask, config.dose_dvh_bin_width)
-                ref_dvh = dose_volume_histogram(ref_dose, ref_mask, config.dose_dvh_bin_width)
+                pred_dvh = dose_volume_histogram(pred_dose, pred_mask, config)
+                ref_dvh = dose_volume_histogram(ref_dose, ref_mask, config)
                 # Outer alignment preserves bins present in only one curve;
                 # missing cumulative volume is zero beyond that curve's range.
                 merged_dvh = pred_dvh.merge(ref_dvh, on="dose_gy", how="outer", suffixes=("_predicted", "_reference"))
