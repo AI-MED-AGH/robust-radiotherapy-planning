@@ -5,9 +5,7 @@ import logging
 import re
 import subprocess
 import sys
-import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +14,7 @@ import numpy as np
 import torch
 
 from src.pipeline.config import MaisiTestingConfig
+from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _extract_patient_id, _is_planning_ct_path, _load_hu_tensor, _load_tensor
 from src.pipeline.helpers.helpers_structures import (
     _register_planning_ct_to_generated_ct,
@@ -431,12 +430,11 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         or its decomposition does not converge.
     """
 
+    clear_directory_contents(config.robust_dose_dir)
+
     settings = OpenTPSSettings.load(config.opentps_config_path)
     inputs = collect_planning_inputs(config, settings)
-    run_id = f"{datetime.now(UTC):%Y-%m-%d_%H-%M-%SZ}_{uuid.uuid4().hex}"
-    run_dir = config.robust_dose_dir / f"run-{run_id}"
-    run_dir.mkdir(parents=True)
-    settings_snapshot = (run_dir / "settings.json").resolve()
+    settings_snapshot = (config.robust_dose_dir / "settings.json").resolve()
     settings_snapshot.write_text(json.dumps(asdict(settings), indent=2, default=str), encoding="utf-8")
     records: list[dict[str, Any]] = []
     plans: list[dict[str, Any]] = []
@@ -461,7 +459,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
             with source.open("rb") as stream:
                 sources[str(source.resolve())] = hashlib.file_digest(stream, "sha256").hexdigest()
             anatomies[index] = _generated_anatomy(source, planning, planning_masks, tensor, grid, config)
-        directory = (run_dir / patient.patient_id).resolve()
+        directory = (config.robust_dose_dir / patient.patient_id).resolve()
         serialized = {}
         for index, (image, masks) in anatomies.items():
             anatomy_dir = directory / "anatomies" / str(index)
@@ -498,7 +496,6 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     manifest = {
         "schema_version": 1,
         "engine": "opentps-core==3.0.1/MCsquare",
-        "run_id": run_id,
         "model_name": settings.model_name,
         "generated_ct_dir": str(config.generated_ct_dir.resolve()),
         "rflow_weight_path": str(config.rflow_weight_path.resolve()),
@@ -507,7 +504,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         "plans": plans,
         "doses": records,
     }
-    temporary = config.robust_dose_dir / f"manifest-{run_id}.json"
+    temporary = config.robust_dose_dir / "manifest.json"
     temporary.write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
     output_manifest = config.robust_dose_dir / "manifest.json"
     temporary.replace(output_manifest)
