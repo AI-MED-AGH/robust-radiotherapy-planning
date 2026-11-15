@@ -27,7 +27,7 @@ dependencies = [
 # Allow for optionally installing the GPU version of PyTorch
 [project.optional-dependencies]
 gpu = [
-    "cupy-cuda12x>=14.0.0,<15.0.0",
+    "cupy-cuda12x>=14.2.0,<15.0.0",
     "torch>=2.11.0,<3.0.0",
     "torchvision>=0.26.0,<1.0.0",
 ]
