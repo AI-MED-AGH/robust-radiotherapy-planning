@@ -58,10 +58,6 @@ Beamlet_Mode			{BEAMLET_MODE} 	# Enable/Disable the beamlet computation mode. De
 Beamlet_Parallelization		{BEAMLET_PARALLELIZATION}	# Parallelization on beamlet level is sometimes faster for beamlet simulation. This requires more memory. Default: False
 
 
-### Treatment plan optimization
-Optimization_Mode		{OPTIMIZATION_MODE}	# Enable/Disable the optimization mode. Default: False
-
-
 ### Statistical noise and stopping criteria
 Compute_stat_uncertainty	{COMPUTE_STAT_UNCERTAINTY}	# Enable/Disable the estimation of statistical uncertainty. Default: True
 Stat_uncertainty 		{STAT_UNCERTAINTY}	# Maximum statistical uncertainty (in percent). Default: 0.0 = no maximum uncertainty (number of proton = Num_Primaries)
