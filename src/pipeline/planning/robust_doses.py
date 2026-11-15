@@ -75,7 +75,15 @@ def _run_opentps_worker(request_path: Path) -> dict[str, Any]:
     log_path = request_path.with_name("opentps.log")
     with log_path.open("w", encoding="utf-8") as stream:
         result = subprocess.run(
-            [sys.executable, "-m", "src.pipeline.planning.worker", str(request_path.resolve())],
+            [
+                sys.executable,
+                "-u",
+                "-X",
+                "faulthandler",
+                "-m",
+                "src.pipeline.planning.worker",
+                str(request_path.resolve()),
+            ],
             cwd=Path(__file__).resolve().parents[3],
             stdout=stream,
             stderr=subprocess.STDOUT,
