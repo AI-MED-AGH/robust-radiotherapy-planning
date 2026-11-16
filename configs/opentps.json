@@ -2,7 +2,7 @@
   "model_name": "selected-generation-model",
   "beam_model_path": "../machine/example/BDL_default_DN_RangeShifter.txt",
   "ct_calibration_dir": "../machine/example/scanner",
-  "target_label": 1,
+  "target_label": 4,
   "prescription_gy": 60.0,
   "gantry_angles": [
     0.0,

@@ -10,6 +10,8 @@ Use the saved planning settings in `configs/opentps.json` as the shared setup fo
 
 The configured machine beam model and CT calibration files must be available at the paths in the JSON; relative paths are resolved from the JSON file. Target and OAR labels must match the dataset's structure maps. Each scenario set includes the planning CT; variant indices select generated CTs, and `"all"` selects every generated variant. These settings are needed only to generate new OpenTPS doses; evaluation of saved doses does not require them.
 
+For the repository's prostate dataset, label `4` is the prostate and label `1` is the external body contour.
+
 Set `model_name` to an identifier for the method that produced the selected CT scenarios, such as a PCA model or a rectified flow model. It is recorded in dose manifests and evaluation results.
 
 ## Run
