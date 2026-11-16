@@ -22,7 +22,9 @@
     "all_generated": "all"
   },
   "oar_limits_gy": {
-    "2": 30.0
+    "2": 30.0,
+    "3": 30.0,
+    "5": 30.0
   },
   "target_weight": 1.0,
   "oar_weight": 1.0,
