@@ -208,6 +208,7 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
         patients.setdefault(_extract_patient_id(path), []).append(path)
     if not patients:
         raise ValueError(f"No prepared CTs in {config.processed_ct_dir}; run 'prepare' first")
+
     generated: dict[str, dict[int, Path]] = {}
     for path in sorted(config.generated_ct_dir.rglob("*.pt")):
         match = re.fullmatch(r"(.+)_gen_(\d+)\.pt", path.name)
@@ -217,11 +218,13 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
             if index in variants:
                 raise ValueError(f"Duplicate generated variant {index} for {patient}")
             variants[index] = path
+
     inputs = []
     for patient, paths in patients.items():
         planning = [path for path in paths if _is_planning_ct_path(path)]
         if len(planning) != 1 or not any(not _is_planning_ct_path(path) for path in paths):
             raise ValueError(f"{patient} needs exactly one planning CT and at least one real follow-up CT")
+
         variants = generated.get(patient, {})
         selected = {}
         for name, selection in settings.scenario_sets.items():
@@ -232,6 +235,7 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
             if missing:
                 raise ValueError(f"Missing generated variants {sorted(missing)} for {patient}, scenario set {name}")
             selected[name] = list(indices)
+
         real_cts = []
         for path in paths:
             ct = _nifti(config.ct_root, patient, path.stem)
@@ -245,6 +249,7 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
                 )
                 continue
             real_cts.append((ct, structures))
+
         planning_ct = _nifti(config.ct_root, patient, planning[0].stem)
         inputs.append(_PatientInputs(patient, planning[0], planning_ct, real_cts, variants, selected))
     return inputs
@@ -325,6 +330,7 @@ def _generated_anatomy(
         raise ValueError(f"Generated CT must contain finite HU values on the planning tensor grid: {path}")
     if generated.min() < config.data_min or generated.max() > config.data_max:
         raise ValueError(f"Generated CT values are outside the configured HU range: {path}")
+
     # Retain uncropped planning anatomy along the beam path outside the model's
     # field of view. Only the generated patch replaces the corresponding CT.
     patch_slices, full_slices = grid_overlap_slices(grid, planning)
@@ -338,6 +344,7 @@ def _generated_anatomy(
     # NiBabel returns NumPy float32 scalars, which SimpleITK SetSpacing rejects
     registration_config.spacing = (float(voxel_spacing[0]), float(voxel_spacing[1]), float(voxel_spacing[2]))
     transform = _register_planning_ct_to_generated_ct(planning_tensor, generated, registration_config)
+
     warped = {}
     for label, mask in planning_masks.items():
         if mask.shape != planning.shape or not np.allclose(mask.affine, planning.affine, rtol=0, atol=1e-6):
@@ -347,12 +354,90 @@ def _generated_anatomy(
         warped[label] = _warp_planning_mask_to_generated_ct(
             torch.from_numpy(patch_mask), generated, transform, registration_config
         )
+
     masks = {}
     for label, values in warped.items():
         full = np.asarray(planning_masks[label].dataobj).copy()
         full[full_slices] = values.numpy()[patch_slices]
         masks[label] = mask_image(full, planning)
     return image, masks
+
+
+def _write_patient_request(
+    patient: _PatientInputs,
+    anatomies: dict[int, tuple[Any, dict[int, Any]]],
+    output_root: Path,
+    settings_snapshot: Path,
+) -> Path:
+    """
+    Write one patient's inputs for the isolated OpenTPS worker.
+
+    Save each scenario CT and its masks as compressed NIfTI files under the
+    patient's ``anatomies/<index>`` directory. The request records these paths
+    alongside the settings, scenario selections and existing real-fraction files.
+
+    Parameters
+    ----------
+    patient : _PatientInputs
+        Patient identifier, selected scenario sets, and real CT and
+        structure-map paths.
+    anatomies : dict[int, tuple[Any, dict[int, Any]]]
+        Scenario CT images paired with their aligned, label-keyed mask
+        images. Index zero is the planning CT and positive indices identify
+        generated variants.
+    output_root : Path
+        Root directory for patient outputs and the base for paths written
+        into the worker's result manifest.
+    settings_snapshot : Path
+        Absolute path to the JSON settings snapshot the worker will load.
+
+    Returns
+    -------
+    Path
+        Absolute path to the patient's ``request.json``.
+
+    Raises
+    ------
+    FileExistsError
+        If an anatomy output directory already exists.
+    OSError
+        If a directory cannot be created or an image or request file cannot
+        be written. Files written before a failure may remain on disk.
+    """
+    directory = (output_root / patient.patient_id).resolve()
+    serialized = {}
+    for index, (image, masks) in anatomies.items():
+        anatomy_dir = directory / "anatomies" / str(index)
+        anatomy_dir.mkdir(parents=True)
+        ct_output = anatomy_dir / "ct.nii.gz"
+        nib.save(image, ct_output)
+
+        mask_paths = {}
+        for label, mask in masks.items():
+            mask_output = anatomy_dir / f"label_{label}.nii.gz"
+            nib.save(mask, mask_output)
+            mask_paths[str(label)] = str(mask_output)
+        serialized[str(index)] = {"ct_path": str(ct_output), "masks": mask_paths}
+
+    request = {
+        "patient_id": patient.patient_id,
+        "patient_dir": str(directory),
+        "output_root": str(output_root.resolve()),
+        "settings_path": str(settings_snapshot),
+        "scenario_sets": patient.selected,
+        "anatomies": serialized,
+        "real_cts": [
+            {
+                "ct_path": str(ct.resolve()),
+                "structure_path": str(structure.resolve()),
+                "scenario_type": "original_anatomy" if _is_planning_ct_path(ct) else "real_fraction_anatomy",
+            }
+            for ct, structure in patient.real_cts
+        ],
+    }
+    request_path = directory / "request.json"
+    request_path.write_text(json.dumps(request, indent=2), encoding="utf-8")
+    return request_path
 
 
 def generate_robust_doses(config: MaisiTestingConfig) -> Path:
@@ -436,6 +521,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     inputs = collect_planning_inputs(config, settings)
     settings_snapshot = (config.robust_dose_dir / "settings.json").resolve()
     settings_snapshot.write_text(json.dumps(asdict(settings), indent=2, default=str), encoding="utf-8")
+
     records: list[dict[str, Any]] = []
     plans: list[dict[str, Any]] = []
     sources: dict[str, str] = {}
@@ -449,50 +535,24 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         for label, mask in planning_masks.items():
             if not np.any(np.asarray(mask.dataobj)):
                 raise ValueError(f"Required optimization structure {label} is empty for {patient.patient_id}")
+
         grid = pipeline_grid(planning, config.target_image_size)
         tensor = _load_hu_tensor(patient.planning_tensor, config, torch.device("cpu"))
         if tuple(tensor.shape) != grid.shape:
             raise ValueError(f"Prepared planning CT shape differs from configured target size for {patient.patient_id}")
+
         anatomies: dict[int, tuple[Any, dict[int, Any]]] = {0: (planning, planning_masks)}
         for index in sorted({index for indices in patient.selected.values() for index in indices}):
             source = patient.generated[index]
             with source.open("rb") as stream:
                 sources[str(source.resolve())] = hashlib.file_digest(stream, "sha256").hexdigest()
             anatomies[index] = _generated_anatomy(source, planning, planning_masks, tensor, grid, config)
-        directory = (config.robust_dose_dir / patient.patient_id).resolve()
-        serialized = {}
-        for index, (image, masks) in anatomies.items():
-            anatomy_dir = directory / "anatomies" / str(index)
-            anatomy_dir.mkdir(parents=True)
-            ct_output = anatomy_dir / "ct.nii.gz"
-            nib.save(image, ct_output)
-            mask_paths = {}
-            for label, mask in masks.items():
-                mask_output = anatomy_dir / f"label_{label}.nii.gz"
-                nib.save(mask, mask_output)
-                mask_paths[str(label)] = str(mask_output)
-            serialized[str(index)] = {"ct_path": str(ct_output), "masks": mask_paths}
-        request = {
-            "patient_id": patient.patient_id,
-            "patient_dir": str(directory),
-            "output_root": str(config.robust_dose_dir.resolve()),
-            "settings_path": str(settings_snapshot),
-            "scenario_sets": patient.selected,
-            "anatomies": serialized,
-            "real_cts": [
-                {
-                    "ct_path": str(ct.resolve()),
-                    "structure_path": str(structure.resolve()),
-                    "scenario_type": "original_anatomy" if _is_planning_ct_path(ct) else "real_fraction_anatomy",
-                }
-                for ct, structure in patient.real_cts
-            ],
-        }
-        request_path = directory / "request.json"
-        request_path.write_text(json.dumps(request, indent=2), encoding="utf-8")
+
+        request_path = _write_patient_request(patient, anatomies, config.robust_dose_dir, settings_snapshot)
         result = _run_opentps_worker(request_path)
         plans.extend(result["plans"])
         records.extend(result["doses"])
+
     manifest = {
         "schema_version": 1,
         "engine": "opentps-core==3.0.1/MCsquare",

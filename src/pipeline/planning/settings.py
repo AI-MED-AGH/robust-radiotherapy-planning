@@ -170,6 +170,7 @@ class OpenTPSSettings:
             raise ValueError("OpenTPS target_label must be an explicit positive structure label")
         if not self.model_name.strip():
             raise ValueError("OpenTPS model_name must identify the model that generated the selected CTs")
+
         positive = (
             "prescription_gy",
             "target_weight",
@@ -188,12 +189,14 @@ class OpenTPSSettings:
                 raise ValueError(f"OpenTPS {name} must be an integer")
         if not math.isfinite(self.target_margin_mm) or self.target_margin_mm < 0:
             raise ValueError("OpenTPS target_margin_mm must be finite and non-negative")
+
         if not self.gantry_angles or not all(math.isfinite(angle) for angle in self.gantry_angles):
             raise ValueError("OpenTPS gantry_angles must contain finite angles")
         if self.couch_angles is None:
             self.couch_angles = [0.0] * len(self.gantry_angles)
         if len(self.couch_angles) != len(self.gantry_angles) or not all(map(math.isfinite, self.couch_angles)):
             raise ValueError("OpenTPS couch_angles must contain one finite angle per beam")
+
         if not self.scenario_sets:
             raise ValueError("OpenTPS scenario_sets cannot be empty")
         for name, indices in self.scenario_sets.items():
@@ -205,6 +208,7 @@ class OpenTPSSettings:
                 raise ValueError(f"Scenario set {name} must be 'all' or a list of positive variant indices")
             if len(indices) != len(set(indices)):
                 raise ValueError(f"Duplicate variant indices in scenario set {name}")
+
         for label, limit in self.oar_limits_gy.items():
             if label <= 0 or label == self.target_label or not math.isfinite(limit) or limit < 0:
                 raise ValueError(f"Invalid OAR label/limit: {label}={limit}")

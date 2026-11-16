@@ -341,48 +341,80 @@ class OpenTPSBackend:
             every possible permutation of beamlet rows or spot columns.
         """
 
-        # Convert the NIfTI anatomy into the image representation expected by OpenTPS
         ct = opentps_image(image, self.CTImage, name=name)
         self.set_grid(ct)
-        # Beamlets describe each spot separately, before choosing its final intensity
         self.calculator.nbPrimaries = self.settings.beamlet_primaries
         beamlets = self.calculator.computeBeamlets(ct, plan)
         matrix = beamlets.toSparseMatrix()
-        # Rows represent CT voxels; columns must match the common plan's ordered spots
-        # Reject invalid dose contributions before they enter the optimization
+
+        # Rows represent CT voxels and columns represent the common plan's ordered spots
         if (
             matrix.shape != (int(np.prod(ct.gridSize)), plan.numberOfSpots)
             or not np.isfinite(matrix.data).all()
             or (matrix.data < 0).any()
         ):
             raise ValueError(f"Invalid or reordered beamlet matrix for {name}")
-        # A correctly sized matrix must also describe the same physical grid as the CT
         if not np.allclose(beamlets.doseOrigin, ct.origin) or not np.allclose(beamlets.doseSpacing, ct.spacing):
             raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
+
+        objectives = self._scenario_objectives(ct, masks, name)
+        fidelity = DoseFidelity(matrix, xSquared=False)
+        fidelity.function = objectives
+
+        # Restrict gradient calculations to voxels covered by the objectives
+        fidelity.croppedMultiplication = True
+        fidelity.unionMaskVec = np.logical_or.reduce([item.maskVec for item in objectives.functionList])
+        return fidelity
+
+    def _scenario_objectives(self, ct: Any, masks: dict[int, Any], name: str) -> Any:
+        """
+        Build weighted target and organ-at-risk objectives for one scenario.
+
+        Use a uniform-dose penalty at the prescription for the target and
+        an overdose penalty above each organ-at-risk limit. Convert each
+        mask to OpenTPS LPS coordinates and build its voxel vector in
+        beamlet row order.
+
+        Parameters
+        ----------
+        ct : opentps.core.data.images.CTImage
+            Scenario CT whose LPS origin, spacing and grid size define the
+            beamlet scoring grid.
+        masks : dict[int, nibabel.spatialimages.SpatialImage]
+            Binary NIfTI masks keyed by structure label. Include the target
+            and every configured organ at risk, aligned with the scenario CT.
+        name : str
+            Scenario identifier used in errors for empty masks.
+
+        Returns
+        -------
+        WeightedSum
+            OpenTPS objective containing the configured weighted penalties.
+            The target comes first so the optimizer can use its mask to
+            scale the initial monitor units.
+
+        Raises
+        ------
+        KeyError
+            If a required structure label is missing.
+        ValueError
+            If a required structure mask is empty after conversion.
+        """
         objectives = WeightedSum()
-        # Insert the target first: optimize() later uses the first objective to scale initial MUs
+        # The optimizer uses the first objective's target mask to scale initial MUs
         limits = {self.settings.target_label: self.settings.prescription_gy, **self.settings.oar_limits_gy}
         for label, limit in limits.items():
-            # Use this anatomy's structure locations, which may differ between scenarios
             mask = opentps_image(masks[label], self.ROIMask, name=f"label_{label}")
             if not np.any(mask.imageArray):
                 raise ValueError(f"Required optimization structure {label} is empty in {name}")
-            # Target: penalize deviation from prescription. OAR: penalize exceeding its limit
+
             objective_class = DUniform if label == self.settings.target_label else DMax
             weight = self.settings.target_weight if label == self.settings.target_label else self.settings.oar_weight
             objective = objective_class(mask, limit, weight=weight)
-            # Flatten the structure mask using the voxel ordering expected by the beamlet matrix
+            # Match the mask's voxel ordering to the beamlet matrix
             objective._updateMaskVec(ct.spacing, ct.gridSize, ct.origin)
             objectives.functionList.append(objective)
-        # For candidate MUs, compute dose = matrix @ MUs and evaluate the structure penalties
-        # xSquared=False means optimization variables are MUs directly, rather than their square roots
-        fidelity = DoseFidelity(matrix, xSquared=False)
-        fidelity.function = objectives
-        # This avoids constructing a large sparse derivative matrix per ROI
-        fidelity.croppedMultiplication = True
-        # Only voxels belonging to at least one objective are needed for the gradient
-        fidelity.unionMaskVec = np.logical_or.reduce([item.maskVec for item in objectives.functionList])
-        return fidelity
+        return objectives
 
     def optimize(self, plan: Any, scenarios: list[Any]) -> tuple[Any, dict[str, Any]]:
         """
@@ -431,6 +463,7 @@ class OpenTPSBackend:
         # Every scenario receives the same MU vector; the largest scenario penalty drives optimization
         objective = RobustWorstCase(nScenarios=len(scenarios))
         objective.robustFunctions = scenarios
+
         # Begin with equal intensity for every spot in the shared geometry
         initial = np.ones(plan.numberOfSpots, dtype=np.float64)
         # Start near prescription rather than arbitrary machine MU units
@@ -482,9 +515,10 @@ class OpenTPSBackend:
             bounds=[(0.0, None)] * len(initial),
             options={"maxiter": self.settings.max_iterations, "maxls": 50, "ftol": 1e-8},
         )
-        # Do not export a plan if the solver failed or produced invalid numerical results
+
         if not result.success or not np.isfinite(result.x).all() or not np.isfinite(result.fun):
             raise RuntimeError(f"OpenTPS worst-case optimization failed: {result.message}")
+
         # Preserve the original plan and put the optimized intensities into an independent copy
         optimized = copy.deepcopy(plan)
         optimized.spotMUs = result.x
