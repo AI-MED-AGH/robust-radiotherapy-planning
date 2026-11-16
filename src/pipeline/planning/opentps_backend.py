@@ -213,7 +213,16 @@ class OpenTPSBackend:
         None
             Stores the settings, image classes, scanner calibration, and
             configured calculator on the new backend instance.
+
+        Raises
+        ------
+        RuntimeError
+            If the installed OpenTPS Core version differs from 3.0.1.
         """
+
+        installed_version = version("opentps-core")
+        if installed_version != "3.0.1":
+            raise RuntimeError(f"OpenTPS dose generation requires opentps-core==3.0.1. Found {installed_version}.")
 
         self.settings = settings
         self.CTImage = CTImage
@@ -221,12 +230,7 @@ class OpenTPSBackend:
         self.calibration = readScanner(str(settings.ct_calibration_dir))
         simulation_dir = simulation_dir.resolve()
         simulation_dir.mkdir(parents=True, exist_ok=True)
-        self.calculator: Any
-        if version("opentps-core") == "3.0.1":
-            self.calculator = _OpenTPS301Calculator(simulation_dir)
-        else:
-            self.calculator = MCsquareDoseCalculator()
-            self.calculator.simulationDirectory = str(simulation_dir)
+        self.calculator = _OpenTPS301Calculator(simulation_dir)
         self.calculator.ctCalibration = self.calibration
         self.calculator.beamModel = readBDL(str(settings.beam_model_path))
 
