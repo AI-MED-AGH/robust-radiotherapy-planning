@@ -452,12 +452,8 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
     real fraction with a structure map, including the planning fraction. Real follow-up scans never
     contribute to plan optimization.
 
-    Settings, anatomy files, requests, logs, plans and doses are stored in a
-    unique run directory. The manifest records settings, generated input
+    The manifest records settings, generated input
     SHA-256 hashes, plan metadata and dose paths.
-    A completed manifest is replaced atomically only after every plan and dose
-    succeeds. Older successful runs remain usable if a subsequent run fails.
-    Partial files from a failed run remain in its run directory.
 
     Parameters
     ----------
