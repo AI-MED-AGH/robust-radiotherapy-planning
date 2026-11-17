@@ -111,7 +111,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         installed_template = Path(getfile(MCsquareConfig)).resolve().with_name("ConfigTemplate.txt")
         if not installed_template.is_file():
             # The 3.0.1 wheel omits this file. Load the release template before plan design.
-            bundled_template = Path(__file__).with_name("_opentps_3_0_1") / installed_template.name
+            bundled_template = Path(__file__).resolve().parents[3] / "opentps_3_0_1" / installed_template.name
             self._bundled_template = bundled_template.read_text(encoding="utf-8")
 
     @property
