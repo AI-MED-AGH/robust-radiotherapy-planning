@@ -33,5 +33,6 @@
   "target_margin_mm": 5.0,
   "beamlet_primaries": 50000,
   "dose_primaries": 1000000,
+  "mcsquare_threads": 4,
   "max_iterations": 200
 }

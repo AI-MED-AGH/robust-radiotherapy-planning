@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 from importlib.metadata import version
 from inspect import getfile
@@ -34,6 +35,8 @@ from scipy.sparse import diags
 
 from src.pipeline.planning.geometry import dose_to_nifti, opentps_image
 from src.pipeline.planning.settings import OpenTPSSettings
+
+logger = logging.getLogger(__name__)
 
 
 class _BundledMCsquareConfig(MCsquareConfig):  # type: ignore[misc]
@@ -87,7 +90,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
     keeps Linux beamlet rescaling sparse.
     """
 
-    def __init__(self, simulation_dir: Path) -> None:
+    def __init__(self, simulation_dir: Path, mcsquare_threads: int) -> None:
         """
         Bind the calculator to a patient-specific simulation directory.
 
@@ -96,6 +99,8 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         simulation_dir : Path
             Absolute path to the worker's simulation directory. The calculator
             creates its MCsquare working directory inside this path.
+        mcsquare_threads : int
+            Number of MCsquare threads, or 0 to use all available threads.
 
         Raises
         ------
@@ -104,6 +109,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             is needed and cannot be read.
         """
         super().__init__()
+        self._mcsquare_threads = mcsquare_threads
         self.simulationDirectory = str(simulation_dir)
         # OpenTPS caches this output path before the simulation directory is assigned.
         self._doseFilePath = str(Path(self._workDir) / "Dose.mhd")
@@ -119,11 +125,11 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         """
         Return the base config used by OpenTPS's calculation modes.
 
-        Preserve the values initialized by OpenTPS in either case. If the
-        installed template is missing, wrap the config so the same settings
-        serialize with the bundled template.
+        Set the thread count for all calculation modes. If the installed
+        template is missing, wrap the config to use the bundled template.
         """
         config = super()._generalMCsquareConfig
+        config["Num_Threads"] = self._mcsquare_threads
         if self._bundled_template is None:
             return config
         return _BundledMCsquareConfig(config.config, self._bundled_template)
@@ -230,7 +236,7 @@ class OpenTPSBackend:
         self.calibration = readScanner(str(settings.ct_calibration_dir))
         simulation_dir = simulation_dir.resolve()
         simulation_dir.mkdir(parents=True, exist_ok=True)
-        self.calculator = _OpenTPS301Calculator(simulation_dir)
+        self.calculator = _OpenTPS301Calculator(simulation_dir, settings.mcsquare_threads)
         self.calculator.ctCalibration = self.calibration
         self.calculator.beamModel = readBDL(str(settings.beam_model_path))
 
@@ -348,6 +354,13 @@ class OpenTPSBackend:
         ct = opentps_image(image, self.CTImage, name=name)
         self.set_grid(ct)
         self.calculator.nbPrimaries = self.settings.beamlet_primaries
+        logger.info(
+            "Computing beamlets for %s: %d spots, CT grid %s, MCsquare threads %s",
+            name,
+            plan.numberOfSpots,
+            ct.gridSize,
+            self.settings.mcsquare_threads or "auto",
+        )
         beamlets = self.calculator.computeBeamlets(ct, plan)
         matrix = beamlets.toSparseMatrix()
 

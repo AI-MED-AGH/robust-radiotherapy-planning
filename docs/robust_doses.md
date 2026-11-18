@@ -37,6 +37,12 @@ Dose evaluation is enabled by default; use `--no-dose-metrics` to skip it. The `
 
 To evaluate the dataset's existing fraction-1 doses without OpenTPS settings, run `dose-evaluate`. If a robust-dose manifest exists, evaluation uses those saved doses instead.
 
+## MCsquare memory use
+
+OpenTPS calculates beamlets in parallel, with memory use increasing as more threads score the CT grid at once. The `mcsquare_threads` setting in `configs/opentps.json` defaults to `4` and applies to beamlet and final dose calculations. If the worker runs out of memory, try `2` or `1` and rerun `dose-generate` with the same configuration. Use `0` to let MCsquare use all available threads. Fewer threads can increase run time. Monte Carlo results can vary with the thread count.
+
+On Linux, check the parent error for the worker exit code and the patient’s `opentps.log` for the last completed stage. Exit `-9` means the worker received SIGKILL. Check the kernel log with `journalctl -k -b --grep='Out of memory|Killed process|oom-kill'`, or check the scheduler or container logs, to confirm whether the kill was due to memory. Thread limits reduce concurrent scoring memory. The sparse beamlet matrices still need to fit in memory for all anatomies used by the patient’s scenario sets.
+
 ## Outputs
 
 Plans, calculated doses, logs, and `manifest.json` are saved under `RESULTS/MAISI_TESTING/robust_dose/<split>/`. Dose evaluation writes `opentps_dose_metrics.csv`, `opentps_dose_summary.csv`, `opentps_dose_dvh.csv`, and `opentps_dose_comparison.csv` to the metrics directory. The manifest is published only after every patient succeeds.

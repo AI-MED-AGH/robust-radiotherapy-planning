@@ -83,6 +83,9 @@ class OpenTPSSettings:
     max_iterations : int
         Positive upper bound on worst-case optimizer iterations. Defaults to
         200.
+    mcsquare_threads : int
+        Number of MCsquare threads for beamlet and dose calculations. Defaults
+        to 4 to limit peak memory. Use 0 to let MCsquare use all available threads.
 
     Raises
     ------
@@ -112,6 +115,7 @@ class OpenTPSSettings:
     beamlet_primaries: int = 50_000
     dose_primaries: int = 1_000_000
     max_iterations: int = 200
+    mcsquare_threads: int = 4
 
     @classmethod
     def load(cls, path: Path) -> "OpenTPSSettings":
@@ -187,6 +191,8 @@ class OpenTPSSettings:
         for name in ("beamlet_primaries", "dose_primaries", "max_iterations"):
             if type(getattr(self, name)) is not int:
                 raise ValueError(f"OpenTPS {name} must be an integer")
+        if type(self.mcsquare_threads) is not int or self.mcsquare_threads < 0:
+            raise ValueError("OpenTPS mcsquare_threads must be a non-negative integer")
         if not math.isfinite(self.target_margin_mm) or self.target_margin_mm < 0:
             raise ValueError("OpenTPS target_margin_mm must be finite and non-negative")
 
