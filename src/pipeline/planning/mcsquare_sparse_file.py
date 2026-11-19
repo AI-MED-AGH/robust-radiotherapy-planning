@@ -2,6 +2,7 @@ import mmap
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from struct import Struct
+from tempfile import TemporaryFile
 from typing import Any
 
 import numpy as np
@@ -72,7 +73,12 @@ def _column_runs(source: mmap.mmap, n_voxels: int, n_spots: int) -> Iterator[np.
 
 
 def read_objective_matrix(
-    path: Path, n_voxels: int, rows: np.ndarray[Any, Any], scaling: Sequence[float]
+    path: Path,
+    n_voxels: int,
+    rows: np.ndarray[Any, Any],
+    scaling: Sequence[float],
+    *,
+    scratch_dir: Path | None = None,
 ) -> csc_matrix:
     """
     Build a compact float32 CSC matrix for the selected scoring-grid rows.
@@ -89,6 +95,9 @@ def read_objective_matrix(
     scaling : Sequence[float]
         One factor per spot, in file order, to convert the stored coefficients
         to dose per monitor unit. Its length is the expected spot count.
+    scratch_dir : Path or None
+        Directory for the temporary matrix files. Defaults to the input file's
+        directory.
 
     Returns
     -------
@@ -99,23 +108,30 @@ def read_objective_matrix(
     Raises
     ------
     OSError
-        If the binary file cannot be opened or mapped.
+        If the binary file cannot be opened or mapped, or scratch writes fail.
     ValueError
-        If the binary file is empty or has invalid spot or run records.
+        If the binary file is empty or contains invalid spot, run, or dose data.
 
     Notes
     -----
     The first pass validates the file layout and counts retained coefficients.
-    The second fills the allocated arrays using views of the memory-mapped file.
+    The second writes one spot at a time and maps the finished arrays read-only.
+    Multiple scenario matrices can be used together while the OS reclaims pages
+    from their temporary files as needed. The mappings own the backing storage.
     """
 
     scales = np.asarray(scaling, dtype=np.float32)
     n_spots = len(scales)
-    with path.open("rb") as stream:
+    scratch_dir = scratch_dir if scratch_dir is not None else path.parent
+    with (
+        path.open("rb") as stream,
+        TemporaryFile(dir=scratch_dir) as index_file,
+        TemporaryFile(dir=scratch_dir) as data_file,
+    ):
         if path.stat().st_size == 0:
             raise ValueError(f"MCsquare sparse dose file is empty: {path}")
         with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as source:
-            # Count intersections first to allocate the retained CSC arrays once
+            # Count intersections first to choose the CSC index width and column offsets
             indptr = np.zeros(n_spots + 1, dtype=np.int64)
             for column, runs in enumerate(_column_runs(source, n_voxels, n_spots)):
                 bounds = np.searchsorted(rows, runs[:, :2])
@@ -123,10 +139,13 @@ def read_objective_matrix(
             np.cumsum(indptr, out=indptr)
             if max(int(indptr[-1]), len(rows), n_spots) <= np.iinfo(np.int32).max:
                 indptr = indptr.astype(np.int32)
-            indices = np.empty(indptr[-1], dtype=indptr.dtype)
-            data = np.empty(indptr[-1], dtype=np.float32)
             for column, runs in enumerate(_column_runs(source, n_voxels, n_spots)):
-                output_start = int(indptr[column])
+                n_values = int(indptr[column + 1] - indptr[column])
+                if not n_values:
+                    continue
+                indices = np.empty(n_values, dtype=indptr.dtype)
+                data = np.empty(n_values, dtype=np.float32)
+                output_start = 0
                 bounds = np.searchsorted(rows, runs[:, :2])
                 active = bounds[:, 0] < bounds[:, 1]
                 for (start, end), (run_start, run_end, dose_offset) in zip(bounds[active], runs[active], strict=True):
@@ -141,4 +160,14 @@ def read_objective_matrix(
                         del values
                     indices[output_start:output_end] = np.arange(start, end, dtype=indices.dtype)
                     output_start = output_end
+                if not np.isfinite(data).all() or (data < 0).any():
+                    raise ValueError(f"Invalid MCsquare dose coefficients in {path}, spot {column + 1}")
+                indices.tofile(index_file)
+                data.tofile(data_file)
+
+        nnz = int(indptr[-1])
+        if not nnz:
+            return csc_matrix((len(rows), n_spots), dtype=np.float32)
+        indices = np.memmap(index_file, mode="r", dtype=indptr.dtype, shape=(nnz,))
+        data = np.memmap(data_file, mode="r", dtype=np.float32, shape=(nnz,))
     return csc_matrix((data, indices, indptr), shape=(len(rows), n_spots), copy=False)

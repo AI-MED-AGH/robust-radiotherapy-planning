@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from opentps.core.data import SparseBeamlets  # type: ignore[import-untyped]
 from opentps.core.data.images import CTImage, ROIMask  # type: ignore[import-untyped]
 from opentps.core.data.MCsquare import MCsquareConfig  # type: ignore[import-untyped]
 from opentps.core.data.plan import ProtonPlanDesign  # type: ignore[import-untyped]
@@ -35,7 +34,7 @@ from opentps.core.processing.planOptimization.objectives.robustFunctions.robustW
 )
 from opentps.core.processing.planOptimization.objectives.weightedSum import WeightedSum  # type: ignore[import-untyped]
 from scipy.optimize import minimize
-from scipy.sparse import csc_matrix, diags
+from scipy.sparse import csc_matrix
 
 from src.pipeline.planning.geometry import dose_to_nifti, opentps_image
 from src.pipeline.planning.mcsquare_sparse_file import read_objective_matrix
@@ -99,7 +98,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
 
     The adapter uses the release template when the installed wheel omits it,
     aligns the cached dose path with the worker's simulation directory, and
-    limits the Windows beamlet import to the objective rows.
+    imports only the beamlet rows used by the optimization objectives.
     """
 
     def __init__(self, simulation_dir: Path, mcsquare_threads: int) -> None:
@@ -154,42 +153,9 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             return config
         return _BundledMCsquareConfig(config.config, self._bundled_template)
 
-    def _computeBeamletsLinux(self) -> Any:
+    def compute_objective_beamlets(self, ct: Any, plan: Any, rows: np.ndarray[Any, Any], name: str) -> csc_matrix:
         """
-        Run the Linux shared library on the prepared plan and input files.
-
-        Apply OpenTPS's per-spot conversion to dose per monitor unit using a
-        sparse diagonal with storage proportional to the number of spots.
-
-        Returns
-        -------
-        SparseBeamlets
-            Sparse voxel-by-spot dose matrix with the current scoring grid's
-            origin, spacing, and dimensions.
-        """
-        from opentps.core.processing.doseCalculation.protons._utils import (  # type: ignore[import-untyped]
-            MCsquareSharedLib,
-        )
-
-        os.environ["MCsquare_Materials_Dir"] = self._materialFolder
-        n_voxels = int(np.prod(self.scoringGridSize))
-        self._mc2Lib = MCsquareSharedLib(mcsquarePath=self._mcsquareSimuDir)
-        matrix = self._mc2Lib.computeBeamletsSharedLib(self._configFilePath, n_voxels, self._plan.numberOfSpots)
-
-        # The upstream implementation builds a dense square array before converting it to CSC
-        scaling = diags(self._beamletRescaling(), dtype=np.float32, format="csc")
-        beamlets = SparseBeamlets()
-        beamlets.setUnitaryBeamlets(matrix @ scaling)
-        beamlets.doseOrigin = self.scoringOrigin
-        beamlets.doseSpacing = self.scoringVoxelSpacing
-        beamlets.doseGridSize = self.scoringGridSize
-        return beamlets
-
-    def compute_windows_objective_beamlets(
-        self, ct: Any, plan: Any, rows: np.ndarray[Any, Any], name: str
-    ) -> csc_matrix:
-        """
-        Simulate beamlets on Windows and import the rows used by the objectives.
+        Run the MCsquare executable and import the rows used by the objectives.
 
         The calculator writes a unit-MU copy of the plan, clears its simulation
         output directory, and runs MCsquare on the configured scoring grid.
@@ -226,10 +192,11 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             If plan preparation changes the spot count, the sparse dose header
             disagrees with the plan or scoring grid, or the binary is invalid.
         """
+        
         n_voxels = int(np.prod(ct.gridSize))
         n_spots = plan.numberOfSpots
 
-        # Prepare the Windows executable's inputs as in OpenTPS computeBeamlets
+        # Prepare the executable's inputs as in OpenTPS computeBeamlets
         self.ct = ct
         self._plan = copy.deepcopy(plan)
         self._plan.spotMUs = np.ones(self._plan.spotMUs.shape)
@@ -241,8 +208,9 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         self._writeFilesToSimuDir()
         self._cleanDir(self._workDir)
         simulation_dir = Path(self._mcsquareSimuDir)
+        command = [str(simulation_dir / "MCsquare_win.exe")] if platform.system() == "Windows" else ["bash", "MCsquare"]
         subprocess.run(
-            [str(simulation_dir / "MCsquare_win.exe")],
+            command,
             cwd=simulation_dir,
             env={**os.environ, "MCsquare_Materials_Dir": self._materialFolder},
             check=True,
@@ -253,7 +221,9 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             raise ValueError(f"Invalid MCsquare beamlet file header for {name}")
         if not np.array_equal(header["ImageSize"], ct.gridSize) or not np.allclose(header["VoxelSpacing"], ct.spacing):
             raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
-        return read_objective_matrix(Path(header["Binary_file"]), n_voxels, rows, self._beamletRescaling())
+        return read_objective_matrix(
+            Path(header["Binary_file"]), n_voxels, rows, self._beamletRescaling(), scratch_dir=simulation_dir
+        )
 
 
 class _ObjectiveDoseFidelity(DoseFidelity):  # type: ignore[misc]
@@ -473,10 +443,9 @@ class OpenTPSBackend:
             If a required structure label is absent from ``masks``.
 
         ValueError
-            If the beamlet matrix has an unexpected shape, non-finite or negative
-            entries, its origin or spacing differs from the CT, or a required
-            converted structure mask is empty. Shape checks alone cannot detect
-            every possible permutation of beamlet rows or spot columns.
+            If the beamlet file has invalid dose coefficients or disagrees with
+            the scoring dimensions, voxel spacing, or spot count, or a required
+            converted structure mask is empty.
         """
 
         ct = opentps_image(image, self.CTImage, name=name)
@@ -494,33 +463,15 @@ class OpenTPSBackend:
             ct.gridSize,
             self.settings.mcsquare_threads or "auto",
         )
-        if platform.system() == "Windows":
-            rows = np.flatnonzero(union)
-            n_rows = len(rows)
-            del union
-            for item in objectives.functionList:
-                item.maskVec = item.maskVec[rows]
-                # Optimization uses the compact mask vector after geometry is set
-                item.roi = None
-            matrix = self.calculator.compute_windows_objective_beamlets(ct, plan, rows, name)
-            fidelity = _ObjectiveDoseFidelity(matrix, xSquared=False)
-        else:
-            beamlets = self.calculator.computeBeamlets(ct, plan)
-            matrix = beamlets.toSparseMatrix()
-            n_rows = n_voxels
-            if not np.allclose(beamlets.doseOrigin, ct.origin) or not np.allclose(beamlets.doseSpacing, ct.spacing):
-                raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
-            fidelity = DoseFidelity(matrix, xSquared=False)
-            fidelity.croppedMultiplication = True
-            fidelity.unionMaskVec = union
-
-        if (
-            matrix.shape != (n_rows, plan.numberOfSpots)
-            or not np.isfinite(matrix.data).all()
-            or (matrix.data < 0).any()
-        ):
-            raise ValueError(f"Invalid or reordered beamlet matrix for {name}")
-        logger.info("Imported %s: %d matrix rows, %d nonzero dose coefficients", name, n_rows, matrix.nnz)
+        rows = np.flatnonzero(union)
+        del union
+        for item in objectives.functionList:
+            item.maskVec = item.maskVec[rows]
+            # Optimization uses the compact mask vector after geometry is set
+            item.roi = None
+        matrix = self.calculator.compute_objective_beamlets(ct, plan, rows, name)
+        logger.info("Imported %s: %d matrix rows, %d nonzero dose coefficients", name, len(rows), matrix.nnz)
+        fidelity = _ObjectiveDoseFidelity(matrix, xSquared=False)
         fidelity.function = objectives
         return fidelity
 
