@@ -192,7 +192,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             If plan preparation changes the spot count, the sparse dose header
             disagrees with the plan or scoring grid, or the binary is invalid.
         """
-        
+
         n_voxels = int(np.prod(ct.gridSize))
         n_spots = plan.numberOfSpots
 
