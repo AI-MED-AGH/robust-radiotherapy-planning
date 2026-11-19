@@ -173,7 +173,7 @@ class OpenTPSSettings:
         TypeError, AttributeError
             If a setting has an incompatible type.
         """
-        
+
         if not self.beam_model_path.is_file():
             raise FileNotFoundError(f"OpenTPS beam model not found: {self.beam_model_path}")
         if not self.ct_calibration_dir.is_dir():
