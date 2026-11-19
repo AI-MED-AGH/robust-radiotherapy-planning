@@ -1,7 +1,7 @@
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Literal
 
@@ -11,11 +11,10 @@ class OpenTPSSettings:
     """
     Settings for OpenTPS proton planning, loaded from JSON with :meth:`load`.
 
-    Required JSON values identify the machine, target, prescription, beam angles,
-    and generation model; relative machine paths are resolved from the JSON
-    file's directory. Each plan is optimized on the planning CT plus its selected
-    generated scenarios, then recalculated on real fractions; prescription and
-    OAR limits are total-plan Gy.
+    The JSON file provides all planning values. Relative machine paths are
+    resolved from that file's directory. Each plan is optimized on the planning
+    CT plus its selected generated scenarios, then recalculated on real fractions.
+    The prescription and OAR limits are total-plan Gy.
 
     Attributes
     ----------
@@ -41,51 +40,47 @@ class OpenTPSSettings:
     scenario_sets : dict[str, list[int] | Literal["all"]]
         Named collections of generated variant indices used for optimization.
         A list selects those positive indices; ``"all"`` selects every
-        available generated variant for that patient. Defaults to a planning-CT-
-        only ``nominal`` set and a ``robust`` set using all generated variants.
+        available generated variant for that patient. An empty list selects only
+        the planning CT.
         Set names must start with a letter or digit and contain only letters,
         digits, underscores, or hyphens. Indices in a list must be unique.
 
-    couch_angles : list[float] | None
-        Couch angle in degrees for each gantry angle. Defaults to zero for every
-        beam when omitted; otherwise, the list length must match
-        ``gantry_angles``.
+    couch_angles : list[float]
+        Couch angle in degrees for each gantry angle. The list length must
+        match ``gantry_angles``.
 
     oar_limits_gy : dict[int, float]
         Mapping from positive, non-target structure labels to maximum dose
-        limits in Gy. Defaults to no OAR objectives.
+        limits in Gy. Use an empty mapping for a plan with no OAR objectives.
 
     target_weight : float
-        Positive weight for the target uniform-dose objective. Defaults to 1.0.
+        Positive weight for the target uniform-dose objective.
 
     oar_weight : float
-        Positive weight for each OAR maximum-dose objective. Defaults to 1.0.
+        Positive weight for each OAR maximum-dose objective.
 
     spot_spacing_mm : float
-        Positive lateral spot spacing in millimetres. Defaults to 5.0.
+        Positive lateral spot spacing in millimetres.
 
     layer_spacing_mm : float
-        Positive energy-layer spacing in millimetres. Defaults to 5.0.
+        Positive energy-layer spacing in millimetres.
 
     target_margin_mm : float
         Non-negative margin in millimetres used when designing the target spot
-        geometry. Defaults to 5.0.
+        geometry.
 
     beamlet_primaries : int
         Positive MCsquare particle count for beamlet calculation. More primaries
-        reduce Monte Carlo noise at greater computational cost. Defaults to
-        50,000.
+        reduce Monte Carlo noise at greater computational cost.
 
     dose_primaries : int
-        Positive MCsquare particle count for final dose recalculation. Defaults
-        to 1,000,000.
+        Positive MCsquare particle count for final dose recalculation.
 
     max_iterations : int
-        Positive upper bound on worst-case optimizer iterations. Defaults to
-        200.
+        Positive upper bound on worst-case optimizer iterations.
     mcsquare_threads : int
-        Number of MCsquare threads for beamlet and dose calculations. Defaults
-        to 4 to limit peak memory. Use 0 to let MCsquare use all available threads.
+        Number of MCsquare threads for beamlet and dose calculations.
+        Use 0 to let MCsquare use all available threads.
 
     Raises
     ------
@@ -102,20 +97,18 @@ class OpenTPSSettings:
     prescription_gy: float
     gantry_angles: list[float]
     model_name: str
-    scenario_sets: dict[str, list[int] | Literal["all"]] = field(
-        default_factory=lambda: {"nominal": [], "robust": "all"}
-    )
-    couch_angles: list[float] | None = None
-    oar_limits_gy: dict[int, float] = field(default_factory=dict)
-    target_weight: float = 1.0
-    oar_weight: float = 1.0
-    spot_spacing_mm: float = 5.0
-    layer_spacing_mm: float = 5.0
-    target_margin_mm: float = 5.0
-    beamlet_primaries: int = 50_000
-    dose_primaries: int = 1_000_000
-    max_iterations: int = 200
-    mcsquare_threads: int = 4
+    scenario_sets: dict[str, list[int] | Literal["all"]]
+    couch_angles: list[float]
+    oar_limits_gy: dict[int, float]
+    target_weight: float
+    oar_weight: float
+    spot_spacing_mm: float
+    layer_spacing_mm: float
+    target_margin_mm: float
+    beamlet_primaries: int
+    dose_primaries: int
+    max_iterations: int
+    mcsquare_threads: int
 
     @classmethod
     def load(cls, path: Path) -> "OpenTPSSettings":
@@ -143,29 +136,44 @@ class OpenTPSSettings:
         UnicodeDecodeError
             If the settings file cannot be decoded as UTF-8.
 
-        KeyError
-            If a required machine-path field is missing.
-
         TypeError, AttributeError
-            If settings containers or field values have incompatible types,
-            or constructor arguments are missing or unknown.
+            If settings containers or field values have incompatible types
+            or the file contains an unknown setting.
 
         ValueError
-            If an OAR label cannot be converted to an integer or settings fail
-            ``validate`` checks.
+            If required settings are missing, an OAR label cannot be converted
+            to an integer, or settings fail ``validate`` checks.
         """
 
         with path.open(encoding="utf-8") as stream:
             values = json.load(stream)
+        if not isinstance(values, dict):
+            raise TypeError(f"OpenTPS settings must be a JSON object in {path}")
+        missing = sorted({item.name for item in fields(cls)} - values.keys())
+        if missing:
+            raise ValueError(f"Missing OpenTPS settings in {path}: {', '.join(missing)}")
         for key in ("beam_model_path", "ct_calibration_dir"):
             value = Path(values[key])
             values[key] = (path.parent / value).resolve() if not value.is_absolute() else value
-        values["oar_limits_gy"] = {int(label): limit for label, limit in values.get("oar_limits_gy", {}).items()}
+        values["oar_limits_gy"] = {int(label): limit for label, limit in values["oar_limits_gy"].items()}
         settings = cls(**values)
         settings.validate()
         return settings
 
     def validate(self) -> None:
+        """
+        Check machine paths, beam geometry, scenario selections, and numeric settings.
+
+        Raises
+        ------
+        FileNotFoundError
+            If a machine data path is missing.
+        ValueError
+            If a planning value fails validation.
+        TypeError, AttributeError
+            If a setting has an incompatible type.
+        """
+        
         if not self.beam_model_path.is_file():
             raise FileNotFoundError(f"OpenTPS beam model not found: {self.beam_model_path}")
         if not self.ct_calibration_dir.is_dir():
@@ -198,8 +206,6 @@ class OpenTPSSettings:
 
         if not self.gantry_angles or not all(math.isfinite(angle) for angle in self.gantry_angles):
             raise ValueError("OpenTPS gantry_angles must contain finite angles")
-        if self.couch_angles is None:
-            self.couch_angles = [0.0] * len(self.gantry_angles)
         if len(self.couch_angles) != len(self.gantry_angles) or not all(map(math.isfinite, self.couch_angles)):
             raise ValueError("OpenTPS couch_angles must contain one finite angle per beam")
 

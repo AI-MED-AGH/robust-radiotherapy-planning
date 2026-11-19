@@ -511,9 +511,8 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
         or its decomposition does not converge.
     """
 
-    clear_directory_contents(config.robust_dose_dir)
-
     settings = OpenTPSSettings.load(config.opentps_config_path)
+    clear_directory_contents(config.robust_dose_dir)
     inputs = collect_planning_inputs(config, settings)
     settings_snapshot = (config.robust_dose_dir / "settings.json").resolve()
     settings_snapshot.write_text(json.dumps(asdict(settings), indent=2, default=str), encoding="utf-8")
