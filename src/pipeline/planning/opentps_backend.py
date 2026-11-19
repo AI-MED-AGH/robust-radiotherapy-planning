@@ -1,5 +1,3 @@
-"""Build and optimize proton plans with OpenTPS and recalculate doses with MCsquare."""
-
 import copy
 import logging
 import os
