@@ -44,6 +44,7 @@ def _load_anatomies(entries: dict[str, Any]) -> dict[int, tuple[Any, dict[int, A
     OSError, nibabel.filebasedimages.ImageFileError
         If a CT or mask cannot be opened as an image.
     """
+
     anatomies = {}
     for index, entry in entries.items():
         image = load_ct(Path(entry["ct_path"]))
@@ -144,14 +145,20 @@ def run_request(request_path: Path) -> Path:
         index: backend.scenario(image, masks, base, f"{request['patient_id']}_scenario_{index}")
         for index, (image, masks) in anatomies.items()
     }
+    optimized_plans = {}
+    for name, indices in request["scenario_sets"].items():
+        logger.info("Optimizing %s on %d anatomies", name, len(indices) + 1)
+        # The planning anatomy supplies the initial target dose
+        optimized_plans[name] = backend.optimize(base, [fidelities[index] for index in [0, *indices]])
+    del fidelities
+
     plans: list[dict[str, Any]] = []
     records: list[dict[str, Any]] = []
     for name, indices in request["scenario_sets"].items():
         output_dir = directory / name
         output_dir.mkdir(parents=True)
 
-        # Include the planning anatomy first so it supplies the initial target dose
-        optimized, optimization = backend.optimize(base, [fidelities[index] for index in [0, *indices]])
+        optimized, optimization = optimized_plans.pop(name)
         backend.save_plan(optimized, output_dir / "plan.dcm")
 
         generated_doses = []

@@ -1,6 +1,10 @@
+"""Build and optimize proton plans with OpenTPS and recalculate doses with MCsquare."""
+
 import copy
 import logging
 import os
+import platform
+import subprocess
 from importlib.metadata import version
 from inspect import getfile
 from pathlib import Path
@@ -12,7 +16,7 @@ from opentps.core.data.images import CTImage, ROIMask  # type: ignore[import-unt
 from opentps.core.data.MCsquare import MCsquareConfig  # type: ignore[import-untyped]
 from opentps.core.data.plan import ProtonPlanDesign  # type: ignore[import-untyped]
 from opentps.core.io.dicomIO import writeRTPlan  # type: ignore[import-untyped]
-from opentps.core.io.mcsquareIO import readBDL  # type: ignore[import-untyped]
+from opentps.core.io.mcsquareIO import _read_sparse_header, readBDL  # type: ignore[import-untyped]
 from opentps.core.io.scannerReader import readScanner  # type: ignore[import-untyped]
 from opentps.core.processing.doseCalculation.protons.mcsquareDoseCalculator import (  # type: ignore[import-untyped]
     MCsquareDoseCalculator,
@@ -31,9 +35,10 @@ from opentps.core.processing.planOptimization.objectives.robustFunctions.robustW
 )
 from opentps.core.processing.planOptimization.objectives.weightedSum import WeightedSum  # type: ignore[import-untyped]
 from scipy.optimize import minimize
-from scipy.sparse import diags
+from scipy.sparse import csc_matrix, diags
 
 from src.pipeline.planning.geometry import dose_to_nifti, opentps_image
+from src.pipeline.planning.mcsquare_sparse_file import read_objective_matrix
 from src.pipeline.planning.settings import OpenTPSSettings
 
 logger = logging.getLogger(__name__)
@@ -59,6 +64,7 @@ class _BundledMCsquareConfig(MCsquareConfig):  # type: ignore[misc]
         template : str
             Release template with uppercase placeholders for MCsquare settings.
         """
+
         self.config = config
         self._template = template
 
@@ -69,11 +75,17 @@ class _BundledMCsquareConfig(MCsquareConfig):  # type: ignore[misc]
         Scalar values are written as strings. Vector settings such as scoring
         origin are written as space-separated components.
 
+        Returns
+        -------
+        str
+            MCsquare configuration text with all template placeholders filled.
+
         Raises
         ------
         KeyError
             If the configuration has no value for a template placeholder.
         """
+
         values = {
             key.upper(): " ".join(map(str, value)) if np.ndim(value) > 0 else str(value)
             for key, value in self.config.items()
@@ -87,7 +99,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
 
     The adapter uses the release template when the installed wheel omits it,
     aligns the cached dose path with the worker's simulation directory, and
-    keeps Linux beamlet rescaling sparse.
+    limits the Windows beamlet import to the objective rows.
     """
 
     def __init__(self, simulation_dir: Path, mcsquare_threads: int) -> None:
@@ -108,15 +120,16 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             If a working directory cannot be created or the fallback template
             is needed and cannot be read.
         """
+
         super().__init__()
         self._mcsquare_threads = mcsquare_threads
         self.simulationDirectory = str(simulation_dir)
-        # OpenTPS caches this output path before the simulation directory is assigned.
+        # OpenTPS caches this output path before the simulation directory is assigned
         self._doseFilePath = str(Path(self._workDir) / "Dose.mhd")
         self._bundled_template: str | None = None
         installed_template = Path(getfile(MCsquareConfig)).resolve().with_name("ConfigTemplate.txt")
         if not installed_template.is_file():
-            # The 3.0.1 wheel omits this file. Load the release template before plan design.
+            # The 3.0.1 wheel omits this file. Load the release template before plan design
             bundled_template = Path(__file__).resolve().parents[3] / "opentps_3_0_1" / installed_template.name
             self._bundled_template = bundled_template.read_text(encoding="utf-8")
 
@@ -127,7 +140,14 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
 
         Set the thread count for all calculation modes. If the installed
         template is missing, wrap the config to use the bundled template.
+
+        Returns
+        -------
+        MCsquareConfig
+            Configuration with the worker's thread count and a template
+            suitable for writing MCsquare input files.
         """
+
         config = super()._generalMCsquareConfig
         config["Num_Threads"] = self._mcsquare_threads
         if self._bundled_template is None:
@@ -156,7 +176,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         self._mc2Lib = MCsquareSharedLib(mcsquarePath=self._mcsquareSimuDir)
         matrix = self._mc2Lib.computeBeamletsSharedLib(self._configFilePath, n_voxels, self._plan.numberOfSpots)
 
-        # The upstream implementation builds a dense square array before converting it to CSC.
+        # The upstream implementation builds a dense square array before converting it to CSC
         scaling = diags(self._beamletRescaling(), dtype=np.float32, format="csc")
         beamlets = SparseBeamlets()
         beamlets.setUnitaryBeamlets(matrix @ scaling)
@@ -164,6 +184,115 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         beamlets.doseSpacing = self.scoringVoxelSpacing
         beamlets.doseGridSize = self.scoringGridSize
         return beamlets
+
+    def compute_windows_objective_beamlets(
+        self, ct: Any, plan: Any, rows: np.ndarray[Any, Any], name: str
+    ) -> csc_matrix:
+        """
+        Simulate beamlets on Windows and import the rows used by the objectives.
+
+        The calculator writes a unit-MU copy of the plan, clears its simulation
+        output directory, and runs MCsquare on the configured scoring grid.
+        The binary importer keeps only the requested voxel rows.
+
+        Parameters
+        ----------
+        ct : opentps.core.data.images.CTImage
+            CT whose origin, spacing, and dimensions match the calculator's
+            scoring grid.
+        plan : opentps.core.data.plan.ProtonPlan
+            Shared spot geometry used across the anatomical scenarios.
+        rows : numpy.ndarray
+            Unique flattened voxel indices in ascending MCsquare order.
+        name : str
+            Anatomy identifier used in log messages and errors.
+
+        Returns
+        -------
+        scipy.sparse.csc_matrix
+            Float32 dose per MU with one row per selected voxel and one column
+            per plan spot, in spot order.
+
+        Raises
+        ------
+        subprocess.CalledProcessError
+            If the MCsquare executable exits with a nonzero status.
+        OSError
+            If an input or output file cannot be accessed or the executable
+            cannot be started.
+        KeyError
+            If required metadata is missing from the sparse dose header.
+        ValueError
+            If plan preparation changes the spot count, the sparse dose header
+            disagrees with the plan or scoring grid, or the binary is invalid.
+        """
+        n_voxels = int(np.prod(ct.gridSize))
+        n_spots = plan.numberOfSpots
+
+        # Prepare the Windows executable's inputs as in OpenTPS computeBeamlets
+        self.ct = ct
+        self._plan = copy.deepcopy(plan)
+        self._plan.spotMUs = np.ones(self._plan.spotMUs.shape)
+        self._plan.simplify(threshold=None)
+        if self._plan.numberOfSpots != n_spots:
+            raise ValueError(f"MCsquare plan preparation changed the number of spots for {name}")
+        self._roi = None
+        self._config = self._beamletComputationConfig
+        self._writeFilesToSimuDir()
+        self._cleanDir(self._workDir)
+        simulation_dir = Path(self._mcsquareSimuDir)
+        subprocess.run(
+            [str(simulation_dir / "MCsquare_win.exe")],
+            cwd=simulation_dir,
+            env={**os.environ, "MCsquare_Materials_Dir": self._materialFolder},
+            check=True,
+        )
+        logger.info("MCsquare scoring finished for %s. Reading %d objective voxels", name, len(rows))
+        header = _read_sparse_header(self._sparseDoseFilePath)
+        if "Beamlet" not in header["SimulationMode"] or header["NbrSpots"] != n_spots:
+            raise ValueError(f"Invalid MCsquare beamlet file header for {name}")
+        if not np.array_equal(header["ImageSize"], ct.gridSize) or not np.allclose(header["VoxelSpacing"], ct.spacing):
+            raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
+        return read_objective_matrix(Path(header["Binary_file"]), n_voxels, rows, self._beamletRescaling())
+
+
+class _ObjectiveDoseFidelity(DoseFidelity):  # type: ignore[misc]
+    """
+    Evaluate dose fidelity using only the voxels covered by the objectives.
+
+    The beamlet matrix and structure masks share the same compact voxel
+    indices. The gradient uses the transpose of the dose derivative to map
+    the weighted voxel penalties back to the spot weights.
+
+    Attributes
+    ----------
+    beamlets : scipy.sparse.csc_matrix
+        Dose per MU for each selected voxel and plan spot.
+    function : WeightedSum
+        Weighted structure objectives with masks indexed to the matrix rows.
+        The planning backend assigns this after construction.
+    """
+
+    def computeFidelityGradient(self, x: Any, dose: Any, dDdx: Any) -> Any:
+        """
+        Compute the weighted penalty gradient with respect to spot weights.
+
+        Parameters
+        ----------
+        x : numpy.ndarray
+            Current optimization variables, one per plan spot.
+        dose : numpy.ndarray
+            Dose at the selected voxels for the current weights.
+        dDdx : scipy.sparse.spmatrix
+            Transposed dose derivative supplied by OpenTPS, with one row per
+            spot and one column per selected voxel.
+
+        Returns
+        -------
+        numpy.ndarray
+            Gradient of the weighted objective, in plan spot order.
+        """
+        return dDdx @ self.function.grad(x, dose=dose, return_dfdD=True)
 
 
 class OpenTPSBackend:
@@ -334,9 +463,8 @@ class OpenTPSBackend:
         Returns
         -------
         fidelity : Any
-            OpenTPS DoseFidelity with a voxel-by-spot beamlet matrix, weighted
-            structure objectives, and direct MU weights (``xSquared=False``).
-            Gradient multiplication is restricted to the union of objective masks.
+            OpenTPS DoseFidelity with weighted structure objectives and direct
+            MU weights. On Windows the matrix and masks use only objective rows.
             The calculator retains this CT's scoring grid and beamlet primaries.
 
         Raises
@@ -354,6 +482,11 @@ class OpenTPSBackend:
         ct = opentps_image(image, self.CTImage, name=name)
         self.set_grid(ct)
         self.calculator.nbPrimaries = self.settings.beamlet_primaries
+        objectives = self._scenario_objectives(ct, masks, name)
+        n_voxels = int(np.prod(ct.gridSize))
+        union = np.zeros(n_voxels, dtype=bool)
+        for item in objectives.functionList:
+            union |= item.maskVec
         logger.info(
             "Computing beamlets for %s: %d spots, CT grid %s, MCsquare threads %s",
             name,
@@ -361,26 +494,34 @@ class OpenTPSBackend:
             ct.gridSize,
             self.settings.mcsquare_threads or "auto",
         )
-        beamlets = self.calculator.computeBeamlets(ct, plan)
-        matrix = beamlets.toSparseMatrix()
+        if platform.system() == "Windows":
+            rows = np.flatnonzero(union)
+            n_rows = len(rows)
+            del union
+            for item in objectives.functionList:
+                item.maskVec = item.maskVec[rows]
+                # Optimization uses the compact mask vector after geometry is set
+                item.roi = None
+            matrix = self.calculator.compute_windows_objective_beamlets(ct, plan, rows, name)
+            fidelity = _ObjectiveDoseFidelity(matrix, xSquared=False)
+        else:
+            beamlets = self.calculator.computeBeamlets(ct, plan)
+            matrix = beamlets.toSparseMatrix()
+            n_rows = n_voxels
+            if not np.allclose(beamlets.doseOrigin, ct.origin) or not np.allclose(beamlets.doseSpacing, ct.spacing):
+                raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
+            fidelity = DoseFidelity(matrix, xSquared=False)
+            fidelity.croppedMultiplication = True
+            fidelity.unionMaskVec = union
 
-        # Rows represent CT voxels and columns represent the common plan's ordered spots
         if (
-            matrix.shape != (int(np.prod(ct.gridSize)), plan.numberOfSpots)
+            matrix.shape != (n_rows, plan.numberOfSpots)
             or not np.isfinite(matrix.data).all()
             or (matrix.data < 0).any()
         ):
             raise ValueError(f"Invalid or reordered beamlet matrix for {name}")
-        if not np.allclose(beamlets.doseOrigin, ct.origin) or not np.allclose(beamlets.doseSpacing, ct.spacing):
-            raise ValueError(f"MCsquare beamlet geometry differs from CT geometry for {name}")
-
-        objectives = self._scenario_objectives(ct, masks, name)
-        fidelity = DoseFidelity(matrix, xSquared=False)
+        logger.info("Imported %s: %d matrix rows, %d nonzero dose coefficients", name, n_rows, matrix.nnz)
         fidelity.function = objectives
-
-        # Restrict gradient calculations to voxels covered by the objectives
-        fidelity.croppedMultiplication = True
-        fidelity.unionMaskVec = np.logical_or.reduce([item.maskVec for item in objectives.functionList])
         return fidelity
 
     def _scenario_objectives(self, ct: Any, masks: dict[int, Any], name: str) -> Any:
@@ -417,6 +558,7 @@ class OpenTPSBackend:
         ValueError
             If a required structure mask is empty after conversion.
         """
+
         objectives = WeightedSum()
         # The optimizer uses the first objective's target mask to scale initial MUs
         limits = {self.settings.target_label: self.settings.prescription_gy, **self.settings.oar_limits_gy}
