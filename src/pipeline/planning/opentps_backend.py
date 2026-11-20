@@ -171,7 +171,7 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
             If simulation files cannot be prepared or the executable permissions
             cannot be read or updated.
         """
-        
+
         super()._writeFilesToSimuDir()
         if platform.system() != "Linux":
             return
