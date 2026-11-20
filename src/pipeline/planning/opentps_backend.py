@@ -3,9 +3,11 @@ import logging
 import os
 import platform
 import subprocess
+from errno import EACCES
 from importlib.metadata import version
 from inspect import getfile
 from pathlib import Path
+from stat import S_IXUSR
 from typing import Any
 
 import numpy as np
@@ -150,6 +152,43 @@ class _OpenTPS301Calculator(MCsquareDoseCalculator):  # type: ignore[misc]
         if self._bundled_template is None:
             return config
         return _BundledMCsquareConfig(config.config, self._bundled_template)
+
+    def _writeFilesToSimuDir(self) -> None:
+        """
+        Prepare MCsquare inputs and executables for beamlet or dose scoring.
+
+        OpenTPS copies the bundled binaries and their permissions each time it
+        prepares a simulation. On Linux, add owner execute permission to each
+        copied variant after the copy because the launcher selects the binary
+        based on the host CPU.
+
+        Raises
+        ------
+        PermissionError
+            If a copied Linux binary cannot be executed, for example when the
+            simulation directory is on a filesystem mounted with ``noexec``.
+        OSError
+            If simulation files cannot be prepared or the executable permissions
+            cannot be read or updated.
+        """
+        
+        super()._writeFilesToSimuDir()
+        if platform.system() != "Linux":
+            return
+
+        simulation_dir = Path(self._mcsquareSimuDir)
+        for suffix in ("", "_avx", "_avx2", "_avx512", "_sse4"):
+            executable = simulation_dir / f"MCsquare_linux{suffix}"
+            mode = executable.stat().st_mode
+            if not mode & S_IXUSR:
+                executable.chmod(mode | S_IXUSR)
+            if not os.access(executable, os.X_OK):
+                raise PermissionError(
+                    EACCES,
+                    "Cannot execute MCsquare. If the output filesystem is mounted noexec, "
+                    "set --robust-dose-dir to a directory that allows execution",
+                    str(executable),
+                )
 
     def compute_objective_beamlets(self, ct: Any, plan: Any, rows: np.ndarray[Any, Any], name: str) -> csc_matrix:
         """
