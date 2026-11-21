@@ -590,7 +590,9 @@ class OpenTPSBackend:
 
         optimization : dict[str, Any]
             Solver report containing ``objective`` (final worst-case penalty),
-            ``iterations`` (iteration count), and ``message`` (termination text).
+            ``iterations`` (iteration count), ``message`` (termination text),
+            and ``converged`` (whether SciPy reported success). A valid iterate
+            at the iteration limit is returned with ``converged`` set to false.
 
         Raises
         ------
@@ -598,7 +600,8 @@ class OpenTPSBackend:
             If the initial mean target dose is non-finite or non-positive.
 
         RuntimeError
-            If the solver reports failure or returns non-finite MUs or objective.
+            If the solver fails for a reason other than the iteration limit or
+            returns invalid MUs or a non-finite objective.
 
         Notes
         -----
@@ -663,8 +666,17 @@ class OpenTPSBackend:
             options={"maxiter": self.settings.max_iterations, "maxls": 50, "ftol": 1e-8},
         )
 
-        if not result.success or not np.isfinite(result.x).all() or not np.isfinite(result.fun):
+        # L-BFGS-B uses status 1 for both iteration and evaluation limits.
+        reached_iteration_limit = result.status == 1 and result.nit >= self.settings.max_iterations
+        if not (result.success or reached_iteration_limit):
             raise RuntimeError(f"OpenTPS worst-case optimization failed: {result.message}")
+        if (
+            result.x.shape != initial.shape
+            or not np.isfinite(result.x).all()
+            or np.any(result.x < 0)
+            or not np.isfinite(result.fun)
+        ):
+            raise RuntimeError(f"OpenTPS worst-case optimization returned an invalid iterate: {result.message}")
 
         # Preserve the original plan and put the optimized intensities into an independent copy
         optimized = copy.deepcopy(plan)
@@ -674,6 +686,7 @@ class OpenTPSBackend:
             "objective": float(result.fun),
             "iterations": int(result.nit),
             "message": str(result.message),
+            "converged": bool(result.success),
         }
 
     def calculate_dose(self, image: Any, plan: Any, path: Path) -> None:

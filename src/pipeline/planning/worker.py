@@ -150,6 +150,14 @@ def run_request(request_path: Path) -> Path:
         logger.info("Optimizing %s on %d anatomies", name, len(indices) + 1)
         # The planning anatomy supplies the initial target dose
         optimized_plans[name] = backend.optimize(base, [fidelities[index] for index in [0, *indices]])
+        optimization = optimized_plans[name][1]
+        if not optimization["converged"]:
+            logger.warning(
+                "Optimization for %s reached the iteration limit (%d), continuing with objective %.6g",
+                name,
+                optimization["iterations"],
+                optimization["objective"],
+            )
     del fidelities
 
     plans: list[dict[str, Any]] = []
