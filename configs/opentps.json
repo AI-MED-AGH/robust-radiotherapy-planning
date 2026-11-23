@@ -16,9 +16,6 @@
   ],
   "scenario_sets": {
     "nominal": [],
-    "one_generated": [
-      1
-    ],
     "all_generated": "all"
   },
   "oar_limits_gy": {
