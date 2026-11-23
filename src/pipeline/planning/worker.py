@@ -83,7 +83,7 @@ def run_request(request_path: Path) -> Path:
     ------
     OSError
         If the request, settings, CTs, masks or machine data cannot be read,
-        or simulation, plan, dose or result files cannot be written.
+        or simulation, dose or result files cannot be written.
 
     json.JSONDecodeError
         If the request or settings file is not valid JSON.
@@ -115,7 +115,7 @@ def run_request(request_path: Path) -> Path:
         or scenario/label indices cannot be converted to integers.
 
     RuntimeError
-        If plan optimization fails or the exported plan file is absent.
+        If plan optimization fails.
 
     Notes
     -----
@@ -167,7 +167,6 @@ def run_request(request_path: Path) -> Path:
         output_dir.mkdir(parents=True)
 
         optimized, optimization = optimized_plans.pop(name)
-        backend.save_plan(optimized, output_dir / "plan.dcm")
 
         generated_doses = []
         for index in indices:
@@ -180,7 +179,6 @@ def run_request(request_path: Path) -> Path:
                 "patient_id": request["patient_id"],
                 "scenario_set": name,
                 "variant_indices": indices,
-                "plan_path": str((output_dir / "plan.dcm").relative_to(root)),
                 "optimization": optimization,
                 "generated_doses": generated_doses,
             }

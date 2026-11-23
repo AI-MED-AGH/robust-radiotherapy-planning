@@ -45,4 +45,4 @@ On Linux, check the parent error for the worker exit code and the patient’s `o
 
 ## Outputs
 
-Plans, calculated doses, logs, and `manifest.json` are saved under `RESULTS/MAISI_TESTING/robust_dose/<split>/`. Dose evaluation writes `opentps_dose_metrics.csv`, `opentps_dose_summary.csv`, `opentps_dose_dvh.csv`, and `opentps_dose_comparison.csv` to the metrics directory. The manifest is published only after every patient succeeds.
+The worker uses each optimized plan in memory to recalculate doses. Calculated doses, logs, and `manifest.json` are saved under `RESULTS/MAISI_TESTING/robust_dose/<split>/`. Dose evaluation writes `opentps_dose_metrics.csv`, `opentps_dose_summary.csv`, `opentps_dose_dvh.csv`, and `opentps_dose_comparison.csv` to the metrics directory. The manifest includes optimization results and is published only after every patient succeeds.

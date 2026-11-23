@@ -14,7 +14,6 @@ import numpy as np
 from opentps.core.data.images import CTImage, ROIMask  # type: ignore[import-untyped]
 from opentps.core.data.MCsquare import MCsquareConfig  # type: ignore[import-untyped]
 from opentps.core.data.plan import ProtonPlanDesign  # type: ignore[import-untyped]
-from opentps.core.io.dicomIO import writeRTPlan  # type: ignore[import-untyped]
 from opentps.core.io.mcsquareIO import _read_sparse_header, readBDL  # type: ignore[import-untyped]
 from opentps.core.io.scannerReader import readScanner  # type: ignore[import-untyped]
 from opentps.core.processing.doseCalculation.protons.mcsquareDoseCalculator import (  # type: ignore[import-untyped]
@@ -727,32 +726,3 @@ class OpenTPSBackend:
         self.calculator.nbPrimaries = self.settings.dose_primaries
         dose = self.calculator.computeDose(ct, plan)
         dose_to_nifti(dose, path)
-
-    def save_plan(self, plan: Any, path: Path) -> None:
-        """
-        Export an OpenTPS proton plan as a DICOM RT Plan file.
-
-        Parameters
-        ----------
-        plan : Any
-            OpenTPS proton plan to export, normally returned by ``optimize``.
-
-        path : Path
-            Expected output path with a ``.dcm`` suffix. The exporter receives
-            its parent directory and filename stem.
-
-        Returns
-        -------
-        None
-            Writes the plan through the OpenTPS DICOM exporter and checks that
-            the expected file exists. File existence does not validate contents.
-
-        Raises
-        ------
-        RuntimeError
-            If the expected file is absent after export.
-        """
-
-        writeRTPlan(plan, str(path.parent), outputFilename=path.stem)
-        if not path.is_file():
-            raise RuntimeError(f"OpenTPS did not export the plan to {path}")
