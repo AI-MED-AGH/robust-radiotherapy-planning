@@ -41,9 +41,11 @@ To evaluate the dataset's existing fraction-1 doses without OpenTPS settings, ru
 
 ## MCsquare memory use
 
-OpenTPS calculates beamlets in parallel, with memory use increasing as more threads score the CT grid at once. The `mcsquare_threads` setting in `configs/opentps.json` defaults to `4` and applies to beamlet and final dose calculations. If the worker runs out of memory, try `2` or `1` and rerun `dose-generate` with the same configuration. Use `0` to let MCsquare use all available threads. Fewer threads can increase run time. Monte Carlo results can vary with the thread count.
+The default config sets `mcsquare_threads` to `0`, so MCsquare uses all available threads for beamlet and final dose calculations. Set a positive integer to limit the thread count if MCsquare runs out of memory while scoring a CT. Fewer threads can reduce scoring memory and increase run time. Monte Carlo results can vary with the thread count.
 
-On Linux, check the parent error for the worker exit code and the patient’s `opentps.log` for the last completed stage. Exit `-9` means the worker received SIGKILL. Check the kernel log with `journalctl -k -b --grep='Out of memory|Killed process|oom-kill'`, or check the scheduler or container logs, to confirm whether the kill was due to memory. Thread limits reduce concurrent scoring memory. The sparse beamlet matrices still need to fit in memory for all anatomies used by the patient’s scenario sets.
+During optimization, the worker uses disk-backed sparse beamlet matrices that retain only the voxels used by the objectives. The OS loads matrix pages into RAM as needed. Larger scenario sets can still increase memory pressure during optimization.
+
+On Linux, check the parent error for the worker exit code and the patient’s `opentps.log` for the last completed stage. Exit `-9` means the worker received SIGKILL. Check the kernel log with `journalctl -k -b --grep='Out of memory|Killed process|oom-kill'`, or check the scheduler or container logs, to confirm whether the kill was due to memory.
 
 ## Outputs
 
