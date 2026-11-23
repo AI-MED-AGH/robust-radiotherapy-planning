@@ -49,27 +49,36 @@ def _column_runs(source: mmap.mmap, n_voxels: int, n_spots: int) -> Iterator[np.
 
     offset = 0
     size = len(source)
+
     for column in range(n_spots):
         if offset + _SPOT_HEADER.size > size:
             raise ValueError(f"MCsquare sparse dose file is missing spot {column + 1}/{n_spots}")
+
         n_values, *_ = _SPOT_HEADER.unpack_from(source, offset)
         offset += _SPOT_HEADER.size
+
         runs = []
         remaining = n_values
         previous_end = 0
+
         while remaining:
             if offset + _RUN_HEADER.size > size:
                 raise ValueError(f"Truncated MCsquare sparse dose run in spot {column + 1}")
+
             count, start = _RUN_HEADER.unpack_from(source, offset)
             dose_offset = offset + _RUN_HEADER.size
             end = start + count
             offset = dose_offset + count * _DOSE_DTYPE.itemsize
+
             if not count or count > remaining or start < previous_end or end > n_voxels or offset > size:
                 raise ValueError(f"Invalid MCsquare sparse dose run in spot {column + 1}")
+
             runs.append((start, end, dose_offset))
             remaining -= count
             previous_end = end
+
         yield np.asarray(runs, dtype=np.int64).reshape(-1, 3)
+
     if offset != size:
         raise ValueError("MCsquare sparse dose file contains data after the last expected spot")
 
@@ -125,6 +134,7 @@ def read_objective_matrix(
     scales = np.asarray(scaling, dtype=np.float32)
     n_spots = len(scales)
     scratch_dir = scratch_dir if scratch_dir is not None else path.parent
+
     with (
         path.open("rb") as stream,
         TemporaryFile(dir=scratch_dir) as index_file,
@@ -132,24 +142,30 @@ def read_objective_matrix(
     ):
         if path.stat().st_size == 0:
             raise ValueError(f"MCsquare sparse dose file is empty: {path}")
+
         with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as source:
             # Count intersections first to choose the CSC index width and column offsets
             indptr = np.zeros(n_spots + 1, dtype=np.int64)
             for column, runs in enumerate(_column_runs(source, n_voxels, n_spots)):
                 bounds = np.searchsorted(rows, runs[:, :2])
                 indptr[column + 1] = (bounds[:, 1] - bounds[:, 0]).sum()
+
             np.cumsum(indptr, out=indptr)
             if max(int(indptr[-1]), len(rows), n_spots) <= np.iinfo(np.int32).max:
                 indptr = indptr.astype(np.int32)
+
             for column, runs in enumerate(_column_runs(source, n_voxels, n_spots)):
                 n_values = int(indptr[column + 1] - indptr[column])
                 if not n_values:
                     continue
+
                 indices = np.empty(n_values, dtype=indptr.dtype)
                 data = np.empty(n_values, dtype=np.float32)
                 output_start = 0
+
                 bounds = np.searchsorted(rows, runs[:, :2])
                 active = bounds[:, 0] < bounds[:, 1]
+
                 for (start, end), (run_start, run_end, dose_offset) in zip(bounds[active], runs[active], strict=True):
                     # Selected CT rows need not be contiguous within the dose run
                     values = np.frombuffer(
@@ -162,6 +178,7 @@ def read_objective_matrix(
                         del values
                     indices[output_start:output_end] = np.arange(start, end, dtype=indices.dtype)
                     output_start = output_end
+
                 if not np.isfinite(data).all() or (data < 0).any():
                     raise ValueError(f"Invalid MCsquare dose coefficients in {path}, spot {column + 1}")
                 indices.tofile(index_file)
@@ -172,4 +189,5 @@ def read_objective_matrix(
             return csc_matrix((len(rows), n_spots), dtype=np.float32)
         indices = np.memmap(index_file, mode="r", dtype=indptr.dtype, shape=(nnz,))
         data = np.memmap(data_file, mode="r", dtype=np.float32, shape=(nnz,))
+
     return csc_matrix((data, indices, indptr), shape=(len(rows), n_spots), copy=False)

@@ -72,39 +72,48 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
     manifest_path = config.robust_dose_dir / "manifest.json"
     with manifest_path.open(encoding="utf-8") as stream:
         manifest = json.load(stream)
+
     if manifest.get("schema_version") != 1 or not manifest.get("doses") or not manifest.get("plans"):
         raise ValueError(f"Invalid or empty OpenTPS dose manifest: {manifest_path}")
+
     rows: list[dict[str, Any]] = []
     dvhs: list[pd.DataFrame] = []
     seen: set[tuple[str, str, str]] = set()
     actual_sources: dict[tuple[str, str], tuple[str, str]] = {}
+
     expected_plans = {(plan["patient_id"], plan["scenario_set"]) for plan in manifest["plans"]}
     received_plans = {(record["patient_id"], record["scenario_set"]) for record in manifest["doses"]}
     if expected_plans != received_plans:
         raise ValueError("Recalculated doses do not cover every plan in the OpenTPS manifest")
+
     for record in manifest["doses"]:
         identity = (record["patient_id"], record["scenario_set"], record["scenario_id"])
         if identity in seen:
             raise ValueError(f"Duplicate recalculated dose in manifest: {identity}")
         seen.add(identity)
+
         scan_key = (record["patient_id"], record["scenario_id"])
         source_pair = (record["ct_path"], record["structure_path"])
         if scan_key in actual_sources and actual_sources[scan_key] != source_pair:
             raise ValueError(f"Scenario sets do not refer to identical real scans for {scan_key}")
         actual_sources[scan_key] = source_pair
+
         dose_path = (config.robust_dose_dir / record["dose_path"]).resolve()
         if not dose_path.is_relative_to(config.robust_dose_dir.resolve()):
             raise ValueError(f"Dose manifest path leaves the configured dose directory: {dose_path}")
+
         ct = load_ct(Path(record["ct_path"]))
         image = canonical_image(nib.load(str(dose_path)))
         native = image.get_fdata(dtype=np.float32)
         if native.ndim != 3 or not np.isfinite(native).all() or (native < 0).any() or not (native > 0).any():
             raise ValueError(f"Invalid recalculated dose: {dose_path}")
+
         # The backend scores doses on the CT grid; mismatches indicate invalid
         # geometry and must be rejected rather than resampled for evaluation.
         same_grid = image.shape == ct.shape and np.allclose(image.affine, ct.affine, atol=1e-3)
         if not same_grid:
             raise ValueError(f"Recalculated dose grid does not match the real CT grid: {dose_path}")
+
         dose = torch.from_numpy(native.copy())
         labels = labels_on_grid(Path(record["structure_path"]), ct)
         metadata = {
@@ -114,6 +123,7 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
             "dose_source": f"opentps:{record['scenario_set']}",
             "dose_path": str(dose_path),
         }
+
         for label in config.structure_labels:
             mask = torch.from_numpy(labels != 0 if label == 0 else labels == label)
             for metric, value in _clinical_metric_values(dose, mask, config).items():
@@ -121,18 +131,22 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
             dvh = dose_volume_histogram(dose, mask, config)
             if not dvh.empty:
                 dvhs.append(dvh.assign(**metadata, structure_label=label))
+
     frame = pd.DataFrame(rows)
     keys = ["model_name", "patient_id", "scenario_set", "scenario_type", "structure_label", "metric"]
     summary = frame.groupby(keys, dropna=False)["value"].agg(["mean", "std", "min", "max", "count"]).reset_index()
+
     comparisons = []
     pairing = ["model_name", "patient_id", "scenario_id", "scenario_type", "structure_label", "metric"]
     sets = sorted(frame["scenario_set"].unique(), key=lambda name: (name != "nominal", name))
+
     for reference, candidate in combinations(sets, 2):
         left = frame.loc[frame["scenario_set"] == reference, [*pairing, "value"]]
         right = frame.loc[frame["scenario_set"] == candidate, [*pairing, "value"]]
         compared = right.merge(
             left, on=pairing, how="outer", suffixes=("_candidate", "_reference"), validate="one_to_one", indicator=True
         )
+
         if not (compared["_merge"] == "both").all():
             raise ValueError(f"Scenario sets {candidate} and {reference} do not cover identical real scans")
         compared = compared.drop(columns="_merge")
@@ -140,14 +154,17 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         compared["reference_set"] = reference
         compared["delta"] = compared["value_candidate"] - compared["value_reference"]
         comparisons.append(compared)
+
     # Calculate everything before publishing any metric file
     config.metrics_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".robust-metrics-", dir=config.metrics_dir) as temporary:
         directory = Path(temporary)
         frame.to_csv(directory / "opentps_dose_metrics.csv", index=False)
         summary.to_csv(directory / "opentps_dose_summary.csv", index=False)
+
         dvh_frame = pd.concat(dvhs, ignore_index=True) if dvhs else pd.DataFrame(columns=["dose_gy", "volume_percent"])
         dvh_frame.to_csv(directory / "opentps_dose_dvh.csv", index=False)
+
         comparison = (
             pd.concat(comparisons, ignore_index=True)
             if comparisons
@@ -156,5 +173,6 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
             )
         )
         comparison.to_csv(directory / "opentps_dose_comparison.csv", index=False)
+
         for path in directory.iterdir():
             path.replace(config.metrics_dir / path.name)
