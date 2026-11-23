@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import math
 import re
@@ -111,7 +113,7 @@ class OpenTPSSettings:
     mcsquare_threads: int
 
     @classmethod
-    def load(cls, path: Path) -> "OpenTPSSettings":
+    def load(cls, path: Path) -> OpenTPSSettings:
         """
         Read and validate JSON settings, resolving machine paths beside the file.
 
