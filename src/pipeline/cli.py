@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     - evaluate: calculate evaluation metrics
     - dose-generate: optimize OpenTPS plans and calculate scenario/real-CT doses
     - dose-evaluate: calculate dose metrics
-    - all: prepare, encode, generate CTs, then evaluate CTs and generate/evaluate doses
+    - all: prepare, encode, generate CTs, generate doses, then evaluate CTs and doses
 
     Returns
     -------
@@ -344,7 +344,7 @@ def run_stage(
     - evaluate: calculate generated-vs-real and variety metrics
     - dose-evaluate: calculate dose metrics
     - dose-generate: generate OpenTPS plans and scenario/real-CT doses
-    - all: prepare, encode, generate CTs, then evaluate CTs and generate/evaluate doses
+    - all: prepare, encode, generate CTs, generate doses, then evaluate CTs and doses
       (dose scoring is enabled by default; generation always runs regardless of --generate-robust-doses)
 
     Parameters
@@ -371,9 +371,14 @@ def run_stage(
         generate_ct_variants(config)
 
     elif stage == "evaluate":
+        if config.generate_robust_doses:
+            config.validate_intermediate_inputs("evaluate")
+            generate_robust_doses(config)
         evaluate_generated_cts(config)
 
     elif stage == "dose-evaluate":
+        if config.generate_robust_doses:
+            generate_robust_doses(config)
         evaluate_doses(config)
 
     elif stage == "dose-generate":
@@ -383,6 +388,7 @@ def run_stage(
         prepare_test_data(config)
         encode_latents(config)
         generate_ct_variants(config)
+        generate_robust_doses(config)
         evaluate_generated_cts(config)
 
     else:

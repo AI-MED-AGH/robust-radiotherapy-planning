@@ -20,7 +20,6 @@ from src.pipeline.helpers.helpers import _clean_pipeline_memory, _extract_patien
 from src.pipeline.helpers.helpers_doses import _contains_dose_files
 from src.pipeline.helpers.helpers_metrics import _build_lpips_model
 from src.pipeline.helpers.helpers_structures import WarpedStructureMaskCache
-from src.pipeline.planning.robust_doses import generate_robust_doses
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,7 @@ def evaluate_doses(
 
     The dose metrics switch controls all scoring. Evaluate available robust
     doses from their completed manifest, or run the basic supplied-dose
-    workflows when no robust doses are available. Generation runs first when
-    requested or when running ``all``, independently of whether evaluation is enabled. OpenTPS settings are inputs
-    to generation and do not select which doses are evaluated.
+    workflows when no robust doses are available.
 
     Parameters
     ----------
@@ -48,10 +45,6 @@ def evaluate_doses(
         Index of mask-file paths produced during structure evaluation this run.
         Reusing this cache avoids repeating planning-to-generated registration.
     """
-
-    if config.stage == "all" or config.generate_robust_doses:
-        logger.info("Generating robust doses with OpenTPS")
-        generate_robust_doses(config)
 
     if not config.use_dose_metrics:
         logger.info("Skipping dose metrics: disabled by configuration")
@@ -242,7 +235,7 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     generated: dict[str, list[Path]] = {}
 
     # Preserve every generated variant; later metric stages decide which
-    # patient/scenario pairs have a corresponding reference
+    # patient/scenario pairs have a corresponding reference.
     for path in paths:
         patient_id = _extract_patient_id(path)
         generated.setdefault(patient_id, []).append(Path(path))
@@ -304,7 +297,7 @@ def evaluate_generated_cts(
     clear_directory_contents(config.metrics_dir)
 
     # Collect once and pass the same grouping to all image/structure stages so
-    # they evaluate an identical snapshot of the available files
+    # they evaluate an identical snapshot of the available files.
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir, allow_empty=True)
     lpips_model = _build_lpips_model(config)
@@ -324,7 +317,7 @@ def evaluate_generated_cts(
         lpips_model=lpips_model,
     )
     # Release metric tensors before registration and structure processing,
-    # which can also have substantial CPU and GPU memory footprints
+    # which can also have substantial CPU and GPU memory footprints.
     _clean_pipeline_memory()
 
     # Structure evaluation returns mask-file paths keyed by generated CT path.
@@ -349,8 +342,7 @@ def evaluate_generated_cts(
     )
     _clean_pipeline_memory()
 
-    # Dose orchestration remains last because it can reuse warped masks while
-    # independently deciding which optional dose workflows are configured
+    # Dose evaluation can reuse the warped masks from structure evaluation
     evaluate_doses(config, warped_mask_cache=warped_mask_cache)
     _clean_pipeline_memory()
 

@@ -165,9 +165,9 @@ class MaisiTestingConfig:
         generated-dose space when a matching generated CT is available.
 
     generate_robust_doses : bool
-        Generate OpenTPS doses when evaluate_doses is called, independently
-        of use_dose_metrics. Defaults to false; ``all`` and ``dose-generate``
-        always generate doses regardless of this flag.
+        Generate OpenTPS doses in the CLI's ``evaluate`` and ``dose-evaluate``
+        stages, independently of ``use_dose_metrics``. Defaults to false.
+        The ``all`` and ``dose-generate`` stages always generate doses.
 
     vae_config : dict | None
         VAE architecture configuration.
