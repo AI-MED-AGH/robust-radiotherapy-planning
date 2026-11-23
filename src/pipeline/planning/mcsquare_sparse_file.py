@@ -26,8 +26,10 @@ def _column_runs(source: mmap.mmap, n_voxels: int, n_spots: int) -> Iterator[np.
     ----------
     source : mmap.mmap
         Mapped contents of the MCsquare sparse beamlet binary.
+
     n_voxels : int
         Number of voxels on the full scoring grid.
+
     n_spots : int
         Number of spot records expected in the file.
 
