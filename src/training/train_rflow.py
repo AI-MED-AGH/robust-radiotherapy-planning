@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
 from torch.utils.data.distributed import DistributedSampler
 
+from src.tensor_io import save_pt
 from src.training.helpers.config import MaisiTrainingConfig
 from src.training.helpers.datasets import PatientFractionPairDataset
 from src.training.helpers.distributed_learning import init_distributed, synchronize_loss
@@ -48,7 +49,7 @@ def save_checkpoint(state: dict[str, Any], file: str | Path) -> None:
     """
 
     try:
-        torch.save(state, file)
+        save_pt(state, file)
     except Exception as err:
         raise RuntimeError(f"Failed to write training checkpoint to path: {file}") from err
 
@@ -359,10 +360,9 @@ def train(config: MaisiTrainingConfig) -> None:
             raw_state = (
                 cast(DiffusionModelUNetMaisi, model.module).state_dict() if is_distributed else model.state_dict()
             )
-            current_model_wts = {k: v.detach().cpu().clone() for k, v in raw_state.items()}
             if rank == 0:
                 try:
-                    torch.save(current_model_wts, config.rflow_weights_path / f"epoch_{epoch}.pt")
+                    save_pt(raw_state, config.rflow_weights_path / f"epoch_{epoch}.pt")
                 except Exception as err:
                     raise RuntimeError(
                         f"Failed to persist evaluation tracking states to directory: {config.rflow_weights_path}"

@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-import torch
 from monai.data import MetaTensor  # type: ignore[attr-defined]
 from monai.transforms import Compose  # type: ignore[attr-defined]
 from tqdm import tqdm
 
+from src.tensor_io import save_pt
 from src.training.helpers.config import MaisiTrainingConfig
 from src.training.helpers.data_loading import get_ct_preprocessing_transform
 
@@ -64,8 +64,8 @@ def process_ct(path: Path, transform: Compose, config: MaisiTrainingConfig, vali
     else:
         save_path = config.processed_ct_dir_train / original_name
 
-    clean_tensor = tensor_data.as_tensor().clone().detach()
-    torch.save(clean_tensor, save_path)
+    clean_tensor = tensor_data.as_tensor()
+    save_pt(clean_tensor, save_path)
 
 
 def process_and_save_cts(

@@ -4,6 +4,7 @@ import torch
 from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
+from src.tensor_io import save_pt
 from src.training.helpers.config import MaisiTrainingConfig
 from src.training.helpers.data_loading import get_ct_dataloaders
 from src.training.helpers.model_init import vae_init
@@ -77,7 +78,7 @@ def process_and_save_latents(
 
                 out_path = save_dir / Path(image_path).name
                 try:
-                    torch.save(latent_image[0, ...].cpu(), out_path)
+                    save_pt(latent_image[0, ...], out_path)
                 except Exception as err:
                     raise RuntimeError(f"Failed to save processed latent space representation to: {out_path}") from err
 
