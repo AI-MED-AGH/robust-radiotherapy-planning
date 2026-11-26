@@ -16,6 +16,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data.distributed import DistributedSampler
 
 from src.data_utils import sliding_window_inference
+from src.tensor_io import save_pt
 from src.training.helpers.config import MaisiTrainingConfig
 from src.training.helpers.data_loading import get_ct_dataloaders
 from src.training.helpers.distributed_learning import init_distributed, synchronize_loss
@@ -47,7 +48,7 @@ def save_checkpoint(state: dict[str, Any], file: str | Path) -> None:
     """
 
     try:
-        torch.save(state, file)
+        save_pt(state, file)
     except Exception as err:
         raise RuntimeError(f"Failed to write training checkpoint to path: {file}") from err
 
@@ -501,7 +502,7 @@ def train(config: MaisiTrainingConfig) -> None:
     # Save the final weights
     if rank == 0:
         try:
-            torch.save(best_model_wts, config.vae_final_weights_path)
+            save_pt(best_model_wts, config.vae_final_weights_path)
             wandb.finish()
         except Exception as err:
             raise RuntimeError(

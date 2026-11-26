@@ -208,7 +208,7 @@ def _load_nifti_dose(path: Path, transform: Compose) -> torch.Tensor:
     transformed = transform({"dose": str(path)})
     dose_meta: MetaTensor = transformed["dose"]
     # Drop MONAI metadata and the singleton channel before caching on CPU
-    return dose_meta.as_tensor().detach().cpu()[0].float()
+    return dose_meta.as_tensor().detach()[0].float()
 
 
 def _masked_dose_values(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) -> torch.Tensor:

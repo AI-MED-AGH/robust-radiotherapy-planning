@@ -123,7 +123,7 @@ class EMA:
                     )
 
                 # Store original weights
-                self.backup[name] = param.data.clone()
+                self.backup[name] = param.detach().clone()
                 # Overwrite with EMA weights IN-PLACE
                 param.data.copy_(ema_parameters[name].data)
 
@@ -160,5 +160,5 @@ class EMA:
                 # Restore original weights IN-PLACE
                 param.data.copy_(self.backup[name])
 
-        # Clear backup dictionary to free up GPU memory after validation loop ends
+        # Clear backup dictionary to free up memory after validation loop ends
         self.backup.clear()

@@ -20,6 +20,7 @@ from monai.transforms import (  # type: ignore[attr-defined]
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers_general import _extract_patient_id, _load_hu_tensor
 from src.pipeline.helpers.helpers_metrics import _as_metric_tensor, _resolve_metric_device
+from src.tensor_io import save_pt
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def _save_warped_structure_masks(
     cache_path = config.warped_structure_cache_dir / generated_ct_path.relative_to(config.generated_ct_dir)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with cache_path.open("wb") as output:
-        torch.save({label: masks[label].detach().cpu().bool() for label in config.structure_labels}, output)
+        save_pt({label: masks[label].bool() for label in config.structure_labels}, output)
     cache[generated_ct_path] = cache_path
 
 
@@ -114,7 +115,7 @@ def _load_warped_structure_masks(
         value = loaded.get(label)
         if not isinstance(value, torch.Tensor):
             raise ValueError(f"Missing mask for label {label} in {cache_path}")
-        masks[label] = value.detach().cpu().bool()
+        masks[label] = value.detach().bool()
     return masks
 
 
@@ -348,7 +349,7 @@ def _load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
 
     transformed = transform({"label": str(path)})
     label_meta: MetaTensor = transformed["label"]
-    label = label_meta.as_tensor().detach().cpu()[0]
+    label = label_meta.as_tensor().detach()[0]
 
     return label.round().to(torch.int16)
 

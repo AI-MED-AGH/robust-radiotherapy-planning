@@ -275,7 +275,7 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
         If the loaded object is a dictionary but does not contain an `"image"`
         key.
     """
-    loaded = cast(torch.Tensor | dict[str, torch.Tensor], torch.load(path, weights_only=True))
+    loaded = cast(torch.Tensor | dict[str, torch.Tensor], torch.load(path, map_location="cpu", weights_only=True))
 
     if isinstance(loaded, dict):
         if "image" in loaded:
@@ -295,7 +295,7 @@ def _load_tensor(path: str | Path) -> torch.Tensor:
     if tensor.ndim == 4:
         tensor = tensor[0]
 
-    return tensor.cpu()
+    return tensor
 
 
 def _to_tensor_hu(
