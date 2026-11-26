@@ -30,19 +30,19 @@ def _snapshot(value: Any) -> Any:
 
     if isinstance(value, torch.Tensor):
         return value.detach().cpu().clone()
-    
+
     if isinstance(value, dict):
         # Keep state_dict attributes, including module version metadata
         result = copy.copy(value)
         result.update((key, _snapshot(item)) for key, item in value.items())
         return result
-    
+
     if isinstance(value, list):
         return [_snapshot(item) for item in value]
-    
+
     if isinstance(value, tuple):
         return tuple(_snapshot(item) for item in value)
-    
+
     return value
 
 
