@@ -37,7 +37,7 @@ python -m src.training.encode_data
 PYTHONPATH=$(pwd) torchrun --nproc_per_node=8 src/training/train_rflow.py
 ```
 
-**IMPORTANT**: The Rectified Flow training pipeline does not perform any kind of early stopping or validation loss calculation. Instead weights are periodically saved. The best model was picked manually and is from epoch *TODO*.
+**IMPORTANT**: The Rectified Flow training pipeline does not perform any kind of early stopping or validation loss calculation. Instead weights are periodically saved. The best model was picked manually, but it ended up being the fully trained model (final epoch).
 
 ## Logging
 
