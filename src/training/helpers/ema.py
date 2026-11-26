@@ -123,7 +123,7 @@ class EMA:
                     )
 
                 # Store original weights
-                self.backup[name] = param.detach().cpu().clone()
+                self.backup[name] = param.detach().clone()
                 # Overwrite with EMA weights IN-PLACE
                 param.data.copy_(ema_parameters[name].data)
 
