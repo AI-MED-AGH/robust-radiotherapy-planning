@@ -8,7 +8,6 @@ import pandas as pd
 import torch
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _extract_patient_id, _is_planning_ct_path, _run_evaluation_tasks
 from src.pipeline.helpers.helpers_doses import (
     _collect_single_dose_per_patient,
     _contains_dose_files,
@@ -27,7 +26,8 @@ from src.pipeline.helpers.helpers_doses import (
     _write_scenario_outputs,
     _write_smoke_test_outputs,
 )
-from src.pipeline.helpers.helpers_structures import (
+from src.pipeline.helpers.helpers_general import _extract_patient_id, _is_planning_ct_path, _run_evaluation_tasks
+from src.pipeline.helpers.helpers_registration import (
     WarpedStructureMaskCache,
     _get_structure_label_transform,
     _label_to_binary_mask,

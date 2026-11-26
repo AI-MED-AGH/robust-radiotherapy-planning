@@ -12,8 +12,7 @@ from tqdm import tqdm
 
 from src.data_utils import LoadProcessedTensord, sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.cleanup import clear_directory_contents
-from src.pipeline.helpers.helpers import _clean_pipeline_memory
+from src.pipeline.helpers.helpers_general import _clean_pipeline_memory, clear_directory_contents
 
 
 def load_vae_model(

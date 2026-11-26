@@ -11,7 +11,7 @@ from monai.metrics.regression import SSIMMetric
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _exclude_planning_cts
+from src.pipeline.helpers.helpers_general import _exclude_planning_cts
 from src.pipeline.helpers.helpers_metrics import (
     LPIPSModel,
     _as_metric_tensor,
