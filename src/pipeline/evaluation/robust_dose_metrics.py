@@ -119,7 +119,6 @@ def evaluate_robust_doses(config: MaisiTestingConfig) -> None:
         metadata = {
             **record,
             "model_name": manifest["model_name"],
-            "run_id": manifest["run_id"],
             "dose_source": f"opentps:{record['scenario_set']}",
             "dose_path": str(dose_path),
         }
