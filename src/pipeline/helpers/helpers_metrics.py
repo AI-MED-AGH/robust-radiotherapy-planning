@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _load_hu_tensor
+from src.pipeline.helpers.helpers_general import _load_hu_tensor
 
 logger = logging.getLogger(__name__)
 

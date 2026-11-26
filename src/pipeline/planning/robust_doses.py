@@ -14,9 +14,14 @@ import numpy as np
 import torch
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.cleanup import clear_directory_contents
-from src.pipeline.helpers.helpers import _extract_patient_id, _is_planning_ct_path, _load_hu_tensor, _load_tensor
-from src.pipeline.helpers.helpers_structures import (
+from src.pipeline.helpers.helpers_general import (
+    _extract_patient_id,
+    _is_planning_ct_path,
+    _load_hu_tensor,
+    _load_tensor,
+    clear_directory_contents,
+)
+from src.pipeline.helpers.helpers_registration import (
     _register_planning_ct_to_generated_ct,
     _warp_planning_mask_to_generated_ct,
 )

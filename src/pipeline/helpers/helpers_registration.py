@@ -18,7 +18,7 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import _extract_patient_id, _load_hu_tensor
+from src.pipeline.helpers.helpers_general import _extract_patient_id, _load_hu_tensor
 from src.pipeline.helpers.helpers_metrics import _as_metric_tensor, _resolve_metric_device
 
 logger = logging.getLogger(__name__)

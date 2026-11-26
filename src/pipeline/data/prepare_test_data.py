@@ -15,8 +15,7 @@ from tqdm import tqdm
 from src.data_utils import create_data_split_dict
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.data.ct_transforms import ct_pad_and_crop
-from src.pipeline.helpers.cleanup import clear_directory_contents
-from src.pipeline.helpers.helpers import _extract_all_ct_paths
+from src.pipeline.helpers.helpers_general import _extract_all_ct_paths, clear_directory_contents
 
 
 def get_ct_preprocessing_transform(config: MaisiTestingConfig) -> Compose:

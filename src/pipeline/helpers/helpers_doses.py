@@ -19,13 +19,13 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers import (
+from src.pipeline.helpers.helpers_general import (
     _extract_patient_id,
     _is_planning_ct_path,
     _load_hu_tensor,
     _load_tensor,
 )
-from src.pipeline.helpers.helpers_structures import (
+from src.pipeline.helpers.helpers_registration import (
     WarpedStructureMaskCache,
     _calculate_structure_registration_result,
     _label_to_binary_mask,
