@@ -54,6 +54,11 @@ Here is an example with NumPy:
 uv add "numpy>=2.4.4,<3.0.0"
 ```
 
+## OpenTPS dose generation
+
+For OpenTPS scenario planning, install `uv sync` and follow
+[the robust dose workflow](robust_doses.md). It requires an explicit machine beam model, CT calibration and planning objectives in addition to Python 3.12.
+
 ## Code Quality Tools
 
 This project uses Ruff and Mypy in order to manage code quality. The following commands are useful:

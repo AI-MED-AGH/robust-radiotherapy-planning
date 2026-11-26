@@ -13,6 +13,7 @@ from src.pipeline.evaluation.image_metrics import (
     calculate_pairwise_variety_metrics,
     calculate_similarity_metrics,
 )
+from src.pipeline.evaluation.robust_dose_metrics import evaluate_robust_doses
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
 from src.pipeline.helpers.cleanup import clear_directory_contents
 from src.pipeline.helpers.helpers import _clean_pipeline_memory, _extract_patient_id
@@ -30,11 +31,9 @@ def evaluate_doses(
     """
     Validate dose inputs and dispatch the configured evaluation workflows.
 
-    The function always checks whether dose evaluation is enabled and whether
-    clinical dose files are available. It can then run the base-dose smoke
-    test, predicted-vs-reference metrics, scenario robustness evaluation, and
-    original-anatomy comparison according to ``config``. Missing predicted
-    doses skip only workflows that require predictions.
+    The dose metrics switch controls all scoring. Evaluate available robust
+    doses from their completed manifest, or run the basic supplied-dose
+    workflows when no robust doses are available.
 
     Parameters
     ----------
@@ -51,10 +50,17 @@ def evaluate_doses(
         logger.info("Skipping dose metrics: disabled by configuration")
         return
 
-    # Every dose workflow needs the clinical dose set, including the smoke
-    # test that intentionally runs without model predictions
+    if (config.robust_dose_dir / "manifest.json").is_file():
+        logger.info("Calculating robust dose metrics")
+        evaluate_robust_doses(config)
+        return
+    else:
+        logger.info("Skipping robust dose metrics: no completed dose manifest found in %s", config.robust_dose_dir)
+
+    # Supplied-dose workflows require clinical doses; robust recalculations
+    # above can be evaluated independently.
     if not _contains_dose_files(config.dose_root):
-        logger.warning("Skipping dose metrics: no clinical dose files found in %s", config.dose_root)
+        logger.warning("Skipping supplied-dose metrics: no clinical dose files found in %s", config.dose_root)
         return
 
     # A standalone dose-evaluate run also shares masks between its workflows.
@@ -229,7 +235,7 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     generated: dict[str, list[Path]] = {}
 
     # Preserve every generated variant; later metric stages decide which
-    # patient/scenario pairs have a corresponding reference
+    # patient/scenario pairs have a corresponding reference.
     for path in paths:
         patient_id = _extract_patient_id(path)
         generated.setdefault(patient_id, []).append(Path(path))
@@ -291,7 +297,7 @@ def evaluate_generated_cts(
     clear_directory_contents(config.metrics_dir)
 
     # Collect once and pass the same grouping to all image/structure stages so
-    # they evaluate an identical snapshot of the available files
+    # they evaluate an identical snapshot of the available files.
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir, allow_empty=True)
     lpips_model = _build_lpips_model(config)
@@ -311,7 +317,7 @@ def evaluate_generated_cts(
         lpips_model=lpips_model,
     )
     # Release metric tensors before registration and structure processing,
-    # which can also have substantial CPU and GPU memory footprints
+    # which can also have substantial CPU and GPU memory footprints.
     _clean_pipeline_memory()
 
     # Structure evaluation returns mask-file paths keyed by generated CT path.
@@ -336,8 +342,7 @@ def evaluate_generated_cts(
     )
     _clean_pipeline_memory()
 
-    # Dose orchestration remains last because it can reuse warped masks while
-    # independently deciding which optional dose workflows are configured
+    # Dose evaluation can reuse the warped masks from structure evaluation
     evaluate_doses(config, warped_mask_cache=warped_mask_cache)
     _clean_pipeline_memory()
 

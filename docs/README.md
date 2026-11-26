@@ -6,3 +6,4 @@
 | **[contribution.md](contribution.md)** | Contribution rules|
 | **[data.md](data.md)** | Data structure and processing|
 | **[training.md](training.md)** | Training scripts|
+| **[robust_doses.md](robust_doses.md)** | OpenTPS configuration, dose generation, and evaluation workflow|
