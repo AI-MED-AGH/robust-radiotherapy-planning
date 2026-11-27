@@ -15,15 +15,15 @@ import torch
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers_general import (
-    _extract_patient_id,
-    _is_planning_ct_path,
-    _load_hu_tensor,
-    _load_tensor,
     clear_directory_contents,
+    extract_patient_id,
+    is_planning_ct_path,
+    load_hu_tensor,
+    load_tensor,
 )
 from src.pipeline.helpers.helpers_registration import (
-    _register_planning_ct_to_generated_ct,
-    _warp_planning_mask_to_generated_ct,
+    register_planning_ct_to_generated_ct,
+    warp_planning_mask_to_generated_ct,
 )
 from src.pipeline.planning.geometry import (
     grid_overlap_slices,
@@ -210,7 +210,7 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
 
     patients: dict[str, list[Path]] = {}
     for path in sorted(config.processed_ct_dir.rglob("*.pt")):
-        patients.setdefault(_extract_patient_id(path), []).append(path)
+        patients.setdefault(extract_patient_id(path), []).append(path)
     if not patients:
         raise ValueError(f"No prepared CTs in {config.processed_ct_dir}; run 'prepare' first")
 
@@ -226,8 +226,8 @@ def collect_planning_inputs(config: MaisiTestingConfig, settings: OpenTPSSetting
 
     inputs = []
     for patient, paths in patients.items():
-        planning = [path for path in paths if _is_planning_ct_path(path)]
-        if len(planning) != 1 or not any(not _is_planning_ct_path(path) for path in paths):
+        planning = [path for path in paths if is_planning_ct_path(path)]
+        if len(planning) != 1 or not any(not is_planning_ct_path(path) for path in paths):
             raise ValueError(f"{patient} needs exactly one planning CT and at least one real follow-up CT")
 
         variants = generated.get(patient, {})
@@ -330,7 +330,7 @@ def _generated_anatomy(
         If grid validation requires solving a singular reference affine.
     """
 
-    generated = _load_tensor(path)
+    generated = load_tensor(path)
     if tuple(generated.shape) != grid.shape or not torch.isfinite(generated).all():
         raise ValueError(f"Generated CT must contain finite HU values on the planning tensor grid: {path}")
     if generated.min() < config.data_min or generated.max() > config.data_max:
@@ -348,7 +348,7 @@ def _generated_anatomy(
     voxel_spacing = grid.header.get_zooms()
     # NiBabel returns NumPy float32 scalars, which SimpleITK SetSpacing rejects
     registration_config.spacing = (float(voxel_spacing[0]), float(voxel_spacing[1]), float(voxel_spacing[2]))
-    transform = _register_planning_ct_to_generated_ct(planning_tensor, generated, registration_config)
+    transform = register_planning_ct_to_generated_ct(planning_tensor, generated, registration_config)
 
     warped = {}
     for label, mask in planning_masks.items():
@@ -356,7 +356,7 @@ def _generated_anatomy(
             raise ValueError(f"Planning structure {label} must match the planning CT grid")
         patch_mask = np.zeros(grid.shape, dtype=np.uint8)
         patch_mask[patch_slices] = np.asarray(mask.dataobj)[full_slices]
-        warped[label] = _warp_planning_mask_to_generated_ct(
+        warped[label] = warp_planning_mask_to_generated_ct(
             torch.from_numpy(patch_mask), generated, transform, registration_config
         )
 
@@ -435,7 +435,7 @@ def _write_patient_request(
             {
                 "ct_path": str(ct.resolve()),
                 "structure_path": str(structure.resolve()),
-                "scenario_type": "original_anatomy" if _is_planning_ct_path(ct) else "real_fraction_anatomy",
+                "scenario_type": "original_anatomy" if is_planning_ct_path(ct) else "real_fraction_anatomy",
             }
             for ct, structure in patient.real_cts
         ],
@@ -537,7 +537,7 @@ def generate_robust_doses(config: MaisiTestingConfig) -> Path:
                 raise ValueError(f"Required optimization structure {label} is empty for {patient.patient_id}")
 
         grid = pipeline_grid(planning, config.target_image_size)
-        tensor = _load_hu_tensor(patient.planning_tensor, config, torch.device("cpu"))
+        tensor = load_hu_tensor(patient.planning_tensor, config, torch.device("cpu"))
         if tuple(tensor.shape) != grid.shape:
             raise ValueError(f"Prepared planning CT shape differs from configured target size for {patient.patient_id}")
 

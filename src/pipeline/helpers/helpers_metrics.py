@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers_general import _load_hu_tensor
+from src.pipeline.helpers.helpers_general import load_hu_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class LPIPSModel(Protocol):
         ...
 
 
-def _build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
+def build_lpips_model(config: MaisiTestingConfig) -> LPIPSModel | None:
     """
     Build the LPIPS model requested by the pipeline configuration.
 
@@ -95,7 +95,7 @@ def _default_metric_device() -> torch.device:
     return torch.device("cpu")
 
 
-def _resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
+def resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
     """
     Choose the device used to compare metric inputs.
 
@@ -129,7 +129,7 @@ def _resolve_metric_device(*values: torch.Tensor | np.ndarray) -> torch.device:
     return _default_metric_device()
 
 
-def _as_metric_tensor(value: torch.Tensor | np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
+def as_metric_tensor(value: torch.Tensor | np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
     """
     Convert a metric input to a float tensor on an optional target device.
 
@@ -163,7 +163,7 @@ def _as_metric_tensor(value: torch.Tensor | np.ndarray, device: torch.device | s
     return tensor
 
 
-def _validate_3d_pair(pred: torch.Tensor, ref: torch.Tensor) -> None:
+def validate_3d_pair(pred: torch.Tensor, ref: torch.Tensor) -> None:
     """
     Validate two 3D metric tensors before comparing them.
 
@@ -204,7 +204,7 @@ def _validate_3d_pair(pred: torch.Tensor, ref: torch.Tensor) -> None:
         raise ValueError("`ref` contains NaN or infinite values")
 
 
-def _cache_patient_cts(
+def cache_patient_cts(
     paths: list[Path],
     config: MaisiTestingConfig,
     device: torch.device,
@@ -229,10 +229,10 @@ def _cache_patient_cts(
         Mapping from each input path to its loaded HU tensor on ``device``.
     """
 
-    return {path: _load_hu_tensor(path, config=config, device=device) for path in paths}
+    return {path: load_hu_tensor(path, config=config, device=device) for path in paths}
 
 
-def _evenly_spaced_slices_for_lpips(
+def evenly_spaced_slices_for_lpips(
     arr: torch.Tensor | np.ndarray,
     max_slices: int = 32,
 ) -> torch.Tensor:
@@ -270,7 +270,7 @@ def _evenly_spaced_slices_for_lpips(
         If `max_slices` is less than 1.
     """
 
-    arr_t = _as_metric_tensor(arr)
+    arr_t = as_metric_tensor(arr)
 
     if arr_t.numel() == 0:
         raise ValueError("`arr` cannot be empty")

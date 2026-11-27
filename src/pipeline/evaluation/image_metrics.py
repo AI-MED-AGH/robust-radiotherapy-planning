@@ -11,15 +11,15 @@ from monai.metrics.regression import SSIMMetric
 from tqdm import tqdm
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers_general import _exclude_planning_cts
+from src.pipeline.helpers.helpers_general import exclude_planning_cts
 from src.pipeline.helpers.helpers_metrics import (
     LPIPSModel,
-    _as_metric_tensor,
-    _build_lpips_model,
-    _cache_patient_cts,
-    _evenly_spaced_slices_for_lpips,
-    _resolve_metric_device,
-    _validate_3d_pair,
+    as_metric_tensor,
+    build_lpips_model,
+    cache_patient_cts,
+    evenly_spaced_slices_for_lpips,
+    resolve_metric_device,
+    validate_3d_pair,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,10 @@ def mae_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> f
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device)
-    ref_t = _as_metric_tensor(ref, device=device)
-    _validate_3d_pair(pred_t, ref_t)
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device)
+    ref_t = as_metric_tensor(ref, device=device)
+    validate_3d_pair(pred_t, ref_t)
 
     return float(torch.mean(torch.abs(pred_t - ref_t)).item())
 
@@ -101,10 +101,10 @@ def ssim_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
         If data falls outside of [data_min, data_max].
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device)
-    ref_t = _as_metric_tensor(ref, device=device)
-    _validate_3d_pair(pred_t, ref_t)
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device)
+    ref_t = as_metric_tensor(ref, device=device)
+    validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
@@ -187,10 +187,10 @@ def psnr_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray, dat
         If data falls outside of [data_min, data_max].
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device)
-    ref_t = _as_metric_tensor(ref, device=device)
-    _validate_3d_pair(pred_t, ref_t)
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device)
+    ref_t = as_metric_tensor(ref, device=device)
+    validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
@@ -245,7 +245,7 @@ def sobel_edge_map_3d(arr: torch.Tensor | np.ndarray) -> torch.Tensor:
         If `arr` contains NaN or infinite values.
     """
 
-    arr_t = _as_metric_tensor(arr)
+    arr_t = as_metric_tensor(arr)
 
     if arr_t.numel() == 0:
         raise ValueError("`arr` cannot be empty")
@@ -304,10 +304,10 @@ def sob_3d(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.ndarray) -> f
         If `pred` or `ref` contains NaN or infinite values.
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device)
-    ref_t = _as_metric_tensor(ref, device=device)
-    _validate_3d_pair(pred_t, ref_t)
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device)
+    ref_t = as_metric_tensor(ref, device=device)
+    validate_3d_pair(pred_t, ref_t)
 
     pred_edge = sobel_edge_map_3d(pred_t)
     ref_edge = sobel_edge_map_3d(ref_t)
@@ -376,10 +376,10 @@ def lpips_3d(
         If `max_slices` is less than 1.
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device)
-    ref_t = _as_metric_tensor(ref, device=device)
-    _validate_3d_pair(pred_t, ref_t)
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device)
+    ref_t = as_metric_tensor(ref, device=device)
+    validate_3d_pair(pred_t, ref_t)
 
     if data_min >= data_max:
         raise ValueError(f"`data_min` must be smaller than `data_max`. Got data_min={data_min}, data_max={data_max}")
@@ -391,12 +391,12 @@ def lpips_3d(
         raise ValueError("`ref` must be normalized to [data_min, data_max]")
 
     # LPIPS is 2D, so compare a bounded slice sample
-    pred_tensor = _evenly_spaced_slices_for_lpips(
+    pred_tensor = evenly_spaced_slices_for_lpips(
         (pred_t - data_min) / (data_max - data_min),
         max_slices=max_slices,
     )
 
-    ref_tensor = _evenly_spaced_slices_for_lpips(
+    ref_tensor = evenly_spaced_slices_for_lpips(
         (ref_t - data_min) / (data_max - data_min),
         max_slices=max_slices,
     )
@@ -470,7 +470,7 @@ def calculate_similarity_metrics(
         desc="Calculating generated vs real image metrics",
     ):
         all_ref_paths = originals.get(patient_id, [])
-        ref_paths = _exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
+        ref_paths = exclude_planning_cts({patient_id: all_ref_paths})[patient_id]
 
         if len(all_ref_paths) == 0:
             warnings.append(f"Skipping {patient_id}: no original/reference CT found")
@@ -483,7 +483,7 @@ def calculate_similarity_metrics(
         patient_paths = [*gen_paths, *ref_paths]
         # Image metrics reuse each generated/reference CT multiple times for a
         # patient, so caching the patient tensors avoids repeated disk loads
-        patient_tensors = _cache_patient_cts(patient_paths, config=config, device=device)
+        patient_tensors = cache_patient_cts(patient_paths, config=config, device=device)
 
         for gen_path in gen_paths:
             gen_arr = patient_tensors[gen_path]
@@ -589,7 +589,7 @@ def calculate_pairwise_variety_metrics(
 
     device = torch.device(config.device)
     if config.use_lpips and lpips_model is None:
-        lpips_model = _build_lpips_model(config)
+        lpips_model = build_lpips_model(config)
     rows = []
     warnings: list[str] = []
 
@@ -601,7 +601,7 @@ def calculate_pairwise_variety_metrics(
 
         # Pairwise metrics compare every generated CT pair for a patient, so
         # each tensor is loaded once and reused across all combinations
-        patient_tensors = _cache_patient_cts(paths, config=config, device=device)
+        patient_tensors = cache_patient_cts(paths, config=config, device=device)
 
         for path_a, path_b in itertools.combinations(paths, 2):
             arr_a = patient_tensors[path_a]

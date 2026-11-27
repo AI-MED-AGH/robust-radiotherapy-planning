@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from src.data_utils import sliding_window_inference
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers_general import _clean_pipeline_memory, clear_directory_contents
+from src.pipeline.helpers.helpers_general import clean_pipeline_memory, clear_directory_contents
 from src.pipeline.inference.encode_latents import load_vae_model
 from src.tensor_io import save_pt
 
@@ -358,4 +358,4 @@ def generate_ct_variants(config: MaisiTestingConfig) -> None:
 
     del loader, rflow_model, scheduler, vae_model
     del class_labels, condition_latent, reconstructed_ct, spacing_tensor, z_t
-    _clean_pipeline_memory()
+    clean_pipeline_memory()

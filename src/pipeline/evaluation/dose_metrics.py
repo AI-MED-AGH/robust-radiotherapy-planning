@@ -9,30 +9,30 @@ import torch
 
 from src.pipeline.config import MaisiTestingConfig
 from src.pipeline.helpers.helpers_doses import (
-    _collect_single_dose_per_patient,
-    _contains_dose_files,
-    _DoseComparisonData,
-    _generated_ct_lookup,
-    _get_dose_transform,
-    _load_dose_comparison_data,
-    _load_dose_distribution,
-    _masked_dose_values,
-    _masked_error_metrics_from_values,
-    _metric_row,
-    _normalised_image_key,
-    _planning_masks_for_dose,
-    _select_dose_for_anatomy,
-    _warp_planning_masks_for_predicted_dose,
-    _write_scenario_outputs,
-    _write_smoke_test_outputs,
+    DoseComparisonData,
+    collect_single_dose_per_patient,
+    contains_dose_files,
+    generated_ct_lookup,
+    get_dose_transform,
+    load_dose_comparison_data,
+    load_dose_distribution,
+    masked_dose_values,
+    masked_error_metrics_from_values,
+    metric_row,
+    normalised_image_key,
+    planning_masks_for_dose,
+    select_dose_for_anatomy,
+    warp_planning_masks_for_predicted_dose,
+    write_scenario_outputs,
+    write_smoke_test_outputs,
 )
-from src.pipeline.helpers.helpers_general import _extract_patient_id, _is_planning_ct_path, _run_evaluation_tasks
+from src.pipeline.helpers.helpers_general import extract_patient_id, is_planning_ct_path, run_evaluation_tasks
 from src.pipeline.helpers.helpers_registration import (
     WarpedStructureMaskCache,
-    _get_structure_label_transform,
-    _label_to_binary_mask,
-    _load_structure_label_map,
-    _structure_path_for_ct,
+    get_structure_label_transform,
+    label_to_binary_mask,
+    load_structure_label_map,
+    structure_path_for_ct,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def dose_volume_histogram(
     if bin_width <= 0:
         raise ValueError("`config.dose_dvh_bin_width` must be greater than 0")
 
-    structure_dose = _masked_dose_values(dose, mask)
+    structure_dose = masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
         return pd.DataFrame(columns=["dose_gy", "volume_percent"])
 
@@ -134,7 +134,7 @@ def dose_at_volume(
     if volume_percent < 0 or volume_percent > 100:
         raise ValueError(f"`volume_percent` must be in [0, 100]. Got {volume_percent}")
 
-    structure_dose = _masked_dose_values(dose, mask)
+    structure_dose = masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
         return float("nan")
 
@@ -182,7 +182,7 @@ def volume_at_dose(
         If the dose and mask shapes differ.
     """
 
-    structure_dose = _masked_dose_values(dose, mask)
+    structure_dose = masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
         return float("nan")
     return float((structure_dose >= dose_threshold).float().mean().item() * 100.0)
@@ -212,7 +212,7 @@ def mean_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarray) 
         If the dose and mask shapes differ.
     """
 
-    structure_dose = _masked_dose_values(dose, mask)
+    structure_dose = masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
         return float("nan")
     return float(structure_dose.mean().item())
@@ -242,7 +242,7 @@ def maximum_dose(dose: torch.Tensor | np.ndarray, mask: torch.Tensor | np.ndarra
         If the dose and mask shapes differ.
     """
 
-    structure_dose = _masked_dose_values(dose, mask)
+    structure_dose = masked_dose_values(dose, mask)
     if structure_dose.numel() == 0:
         return float("nan")
     return float(structure_dose.max().item())
@@ -393,14 +393,14 @@ def _evaluate_dose_on_real_structures(
         unsupported extension, or a configured Dx percentage is invalid.
     """
 
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
+    dose_transform = get_dose_transform(config)
+    structure_transform = get_structure_label_transform(config)
     real_ct_paths = sorted(config.processed_ct_dir.rglob("*.pt"))
     rows: list[dict[str, Any]] = []
 
     for ct_path in real_ct_paths:
-        patient_id = _extract_patient_id(ct_path)
-        dose_path, selected_source = _select_dose_for_anatomy(
+        patient_id = extract_patient_id(ct_path)
+        dose_path, selected_source = select_dose_for_anatomy(
             patient_dose=dose_groups.get(patient_id),
             clinical_path=reference_groups.get(patient_id),
             dose_source=dose_source,
@@ -410,15 +410,15 @@ def _evaluate_dose_on_real_structures(
             logger.warning("Skipping real-anatomy dose metrics for %s: no dose found", ct_path)
             continue
 
-        structure_path = _structure_path_for_ct(ct_path, config)
+        structure_path = structure_path_for_ct(ct_path, config)
         if not structure_path.exists():
             logger.warning("Skipping real-anatomy dose metrics for %s: missing %s", ct_path, structure_path)
             continue
 
-        dose = _load_dose_distribution(dose_path, dose_transform)
-        label_map = _load_structure_label_map(structure_path, structure_transform)
-        masks = {label: _label_to_binary_mask(label_map, label) for label in config.structure_labels}
-        scenario_type = "original_anatomy" if _is_planning_ct_path(ct_path) else "real_fraction_anatomy"
+        dose = load_dose_distribution(dose_path, dose_transform)
+        label_map = load_structure_label_map(structure_path, structure_transform)
+        masks = {label: label_to_binary_mask(label_map, label) for label in config.structure_labels}
+        scenario_type = "original_anatomy" if is_planning_ct_path(ct_path) else "real_fraction_anatomy"
         _append_single_dose_rows(
             rows,
             dose,
@@ -427,7 +427,7 @@ def _evaluate_dose_on_real_structures(
             {
                 "dose_source": selected_source,
                 "patient_id": patient_id,
-                "scenario_id": _normalised_image_key(ct_path),
+                "scenario_id": normalised_image_key(ct_path),
                 "scenario_type": scenario_type,
                 "dose_path": str(dose_path),
                 "structure_source": str(structure_path),
@@ -477,19 +477,19 @@ def _evaluate_dose_on_generated_structures(
         unsupported extension, or a configured Dx percentage is invalid.
     """
 
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
-    generated_lookup = _generated_ct_lookup(config)
+    dose_transform = get_dose_transform(config)
+    structure_transform = get_structure_label_transform(config)
+    generated_lookup = generated_ct_lookup(config)
     generated_by_patient: dict[str, list[Path]] = {}
     # Re-group the flat scenario lookup so each patient's single dose can be
     # evaluated on every generated anatomy belonging to that patient.
     for generated_path in generated_lookup.values():
-        generated_by_patient.setdefault(_extract_patient_id(generated_path), []).append(generated_path)
+        generated_by_patient.setdefault(extract_patient_id(generated_path), []).append(generated_path)
 
     # Flatten scenarios so prefetch continues across patient boundaries.
     tasks: list[tuple[str, Path, Path, str]] = []
     for patient_id, generated_paths in generated_by_patient.items():
-        scenario_dose_path, selected_source = _select_dose_for_anatomy(
+        scenario_dose_path, selected_source = select_dose_for_anatomy(
             patient_dose=dose_groups.get(patient_id),
             clinical_path=reference_groups.get(patient_id),
             dose_source=dose_source,
@@ -519,9 +519,9 @@ def _evaluate_dose_on_generated_structures(
             active_patient = patient_id
         dose = dose_cache.get(scenario_dose_path)
         if dose is None:
-            dose = _load_dose_distribution(scenario_dose_path, dose_transform)
+            dose = load_dose_distribution(scenario_dose_path, dose_transform)
             dose_cache[scenario_dose_path] = dose
-        masks, mask_source, _, warning = _warp_planning_masks_for_predicted_dose(
+        masks, mask_source, _, warning = warp_planning_masks_for_predicted_dose(
             pred_path=generated_path,
             pred_dose=dose,
             patient_id=patient_id,
@@ -554,14 +554,14 @@ def _evaluate_dose_on_generated_structures(
             {
                 "dose_source": selected_source,
                 "patient_id": patient_id,
-                "scenario_id": _normalised_image_key(generated_path),
+                "scenario_id": normalised_image_key(generated_path),
                 "scenario_type": "generated_anatomy",
                 "dose_path": str(scenario_dose_path),
                 "structure_source": mask_source,
             },
         )
 
-    _run_evaluation_tasks(
+    run_evaluation_tasks(
         tasks,
         load_scenario,
         calculate_scenario_metrics,
@@ -602,19 +602,19 @@ def evaluate_original_anatomy_comparison(config: MaisiTestingConfig) -> None:
         ``[0, 100]``.
     """
 
-    candidates = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
-    clinical_doses = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
+    candidates = collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
+    clinical_doses = collect_single_dose_per_patient(config.dose_root, planning_only=True)
+    dose_transform = get_dose_transform(config)
+    structure_transform = get_structure_label_transform(config)
     rows: list[dict[str, Any]] = []
     for patient_id, clinical_path in clinical_doses.items():
         candidate_path = candidates.get(patient_id)
         if candidate_path is None:
             logger.warning("Skipping original anatomy comparison for %s: no candidate dose found", patient_id)
             continue
-        clinical = _load_dose_distribution(clinical_path, dose_transform)
-        candidate = _load_dose_distribution(candidate_path, dose_transform)
-        masks = _planning_masks_for_dose(clinical_path, structure_transform, config)
+        clinical = load_dose_distribution(clinical_path, dose_transform)
+        candidate = load_dose_distribution(candidate_path, dose_transform)
+        masks = planning_masks_for_dose(clinical_path, structure_transform, config)
         if masks is None or clinical.shape != candidate.shape:
             continue
         for label, mask in masks.items():
@@ -678,15 +678,15 @@ def evaluate_scenario_robustness(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
+    references = collect_single_dose_per_patient(config.dose_root, planning_only=True)
     predicted = (
-        _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
-        if _contains_dose_files(config.predicted_dose_dir)
+        collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
+        if contains_dose_files(config.predicted_dose_dir)
         else {}
     )
     rows = _evaluate_dose_on_real_structures(predicted, references, config, "candidate")
     rows.extend(_evaluate_dose_on_generated_structures(predicted, references, config, "candidate", cache))
-    _write_scenario_outputs(rows, config, "scenario_robustness")
+    write_scenario_outputs(rows, config, "scenario_robustness")
 
 
 def evaluate_base_dose_smoke_test(
@@ -730,7 +730,7 @@ def evaluate_base_dose_smoke_test(
     """
 
     cache = warped_mask_cache if warped_mask_cache is not None else {}
-    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
+    references = collect_single_dose_per_patient(config.dose_root, planning_only=True)
     # Keep the clinical planning dose fixed while evaluating original, observed
     # follow-up, and generated-anatomy structure masks
     rows = _evaluate_dose_on_real_structures(
@@ -741,7 +741,7 @@ def evaluate_base_dose_smoke_test(
         force_clinical=True,
     )
     rows.extend(_evaluate_dose_on_generated_structures(references, references, config, "base_fraction_1", cache))
-    _write_smoke_test_outputs(rows, config)
+    write_smoke_test_outputs(rows, config)
 
 
 def calculate_dose_evaluation_metrics(
@@ -788,9 +788,9 @@ def calculate_dose_evaluation_metrics(
         If dose metrics are configured to use CUDA but CUDA is unavailable.
     """
 
-    dose_transform = _get_dose_transform(config)
-    structure_transform = _get_structure_label_transform(config)
-    generated_ct_lookup = _generated_ct_lookup(config)
+    dose_transform = get_dose_transform(config)
+    structure_transform = get_structure_label_transform(config)
+    generated_lookup = generated_ct_lookup(config)
     # The cache may have been populated by structure metrics earlier in the
     # pipeline. Reusing it avoids repeating expensive deformable registration.
     shared_generated_mask_cache = warped_mask_cache if warped_mask_cache is not None else {}
@@ -811,7 +811,7 @@ def calculate_dose_evaluation_metrics(
         f"labels={config.structure_labels}, metric_device={metric_device}"
     )
 
-    def append_metrics_for_comparison(result: _DoseComparisonData, current_patient_id: str) -> None:
+    def append_metrics_for_comparison(result: DoseComparisonData, current_patient_id: str) -> None:
         """
         Move one CPU-loaded dose comparison to the metric device and append rows.
 
@@ -821,7 +821,7 @@ def calculate_dose_evaluation_metrics(
 
         Parameters
         ----------
-        result : _DoseComparisonData
+        result : DoseComparisonData
             CPU-loaded data for one dose comparison.
 
         current_patient_id : str
@@ -862,7 +862,7 @@ def calculate_dose_evaluation_metrics(
             if result.ref_label_map is not None:
                 ref_label_map = result.ref_label_map.to(metric_device)
                 for label in config.structure_labels:
-                    ref_mask = _label_to_binary_mask(ref_label_map, label)
+                    ref_mask = label_to_binary_mask(ref_label_map, label)
                     if result.pred_masks is None:
                         pred_mask = ref_mask
                         pred_structure_source = result.pred_structure_source
@@ -889,7 +889,7 @@ def calculate_dose_evaluation_metrics(
                 # and reference masks can select different voxel sets, while
                 # aggregate clinical metrics remain meaningful for both sets.
                 if torch.equal(pred_mask, ref_mask):
-                    voxel_mae, voxel_rmse = _masked_error_metrics_from_values(
+                    voxel_mae, voxel_rmse = masked_error_metrics_from_values(
                         pred_structure_dose,
                         ref_structure_dose,
                     )
@@ -909,15 +909,15 @@ def calculate_dose_evaluation_metrics(
 
                 distribution_rows.extend(
                     [
-                        _metric_row("voxel_mae", voxel_mae, 0.0, base),
-                        _metric_row("voxel_rmse", voxel_rmse, 0.0, base),
-                        _metric_row(
+                        metric_row("voxel_mae", voxel_mae, 0.0, base),
+                        metric_row("voxel_rmse", voxel_rmse, 0.0, base),
+                        metric_row(
                             "mean_dose",
                             mean_dose(pred_dose, pred_mask),
                             mean_dose(ref_dose, ref_mask),
                             base,
                         ),
-                        _metric_row(
+                        metric_row(
                             "maximum_dose",
                             maximum_dose(pred_dose, pred_mask),
                             maximum_dose(ref_dose, ref_mask),
@@ -928,7 +928,7 @@ def calculate_dose_evaluation_metrics(
 
                 for volume_percent in config.dose_dx_volume_percents:
                     clinical_rows.append(
-                        _metric_row(
+                        metric_row(
                             f"D{volume_percent:g}",
                             dose_at_volume(pred_dose, pred_mask, volume_percent),
                             dose_at_volume(ref_dose, ref_mask, volume_percent),
@@ -938,7 +938,7 @@ def calculate_dose_evaluation_metrics(
 
                 for dose_threshold in config.dose_vx_thresholds:
                     clinical_rows.append(
-                        _metric_row(
+                        metric_row(
                             f"V{dose_threshold:g}Gy",
                             volume_at_dose(pred_dose, pred_mask, dose_threshold),
                             volume_at_dose(ref_dose, ref_mask, dose_threshold),
@@ -973,7 +973,7 @@ def calculate_dose_evaluation_metrics(
             continue
         tasks.append((patient_id, pred_path, ref_path))
 
-    def load_comparison(task: tuple[str, Path, Path]) -> _DoseComparisonData:
+    def load_comparison(task: tuple[str, Path, Path]) -> DoseComparisonData:
         patient_id, pred_path, ref_path = task
         # Keep loader inputs patient-scoped. The shared generated-mask cache can
         # still reuse structure registration performed by an earlier workflow.
@@ -983,13 +983,13 @@ def calculate_dose_evaluation_metrics(
         planning_label_map_cache: dict[str, torch.Tensor] = {}
         generated_mask_cache: WarpedStructureMaskCache = shared_generated_mask_cache
 
-        return _load_dose_comparison_data(
+        return load_dose_comparison_data(
             pred_path=pred_path,
             ref_path=ref_path,
             patient_id=patient_id,
             dose_transform=dose_transform,
             structure_transform=structure_transform,
-            generated_ct_lookup=generated_ct_lookup,
+            generated_ct_lookup=generated_lookup,
             reference_dose_cache=reference_dose_cache,
             structure_cache=structure_cache,
             planning_ct_cache=planning_ct_cache,
@@ -998,10 +998,10 @@ def calculate_dose_evaluation_metrics(
             config=config,
         )
 
-    def calculate_comparison_metrics(task: tuple[str, Path, Path], result: _DoseComparisonData) -> None:
+    def calculate_comparison_metrics(task: tuple[str, Path, Path], result: DoseComparisonData) -> None:
         append_metrics_for_comparison(result, task[0])
 
-    _run_evaluation_tasks(
+    run_evaluation_tasks(
         tasks, load_comparison, calculate_comparison_metrics, config.device, "Calculating dose metrics"
     )
 
@@ -1085,8 +1085,8 @@ def evaluate_predicted_doses(
         If dose metrics are configured to use CUDA but CUDA is unavailable.
     """
 
-    predicted = _collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
-    references = _collect_single_dose_per_patient(config.dose_root, planning_only=True)
+    predicted = collect_single_dose_per_patient(config.predicted_dose_dir, planning_only=False)
+    references = collect_single_dose_per_patient(config.dose_root, planning_only=True)
 
     calculate_dose_evaluation_metrics(
         predicted=predicted,

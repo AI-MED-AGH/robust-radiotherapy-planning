@@ -15,9 +15,9 @@ from src.pipeline.evaluation.image_metrics import (
 )
 from src.pipeline.evaluation.robust_dose_metrics import evaluate_robust_doses
 from src.pipeline.evaluation.structure_metrics import calculate_structure_similarity_metrics
-from src.pipeline.helpers.helpers_doses import _contains_dose_files
-from src.pipeline.helpers.helpers_general import _clean_pipeline_memory, _extract_patient_id, clear_directory_contents
-from src.pipeline.helpers.helpers_metrics import _build_lpips_model
+from src.pipeline.helpers.helpers_doses import contains_dose_files
+from src.pipeline.helpers.helpers_general import clean_pipeline_memory, clear_directory_contents, extract_patient_id
+from src.pipeline.helpers.helpers_metrics import build_lpips_model
 from src.pipeline.helpers.helpers_registration import WarpedStructureMaskCache
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def evaluate_doses(
 
     # Supplied-dose workflows require clinical doses; robust recalculations
     # above can be evaluated independently.
-    if not _contains_dose_files(config.dose_root):
+    if not contains_dose_files(config.dose_root):
         logger.warning("Skipping supplied-dose metrics: no clinical dose files found in %s", config.dose_root)
         return
 
@@ -73,7 +73,7 @@ def evaluate_doses(
     else:
         logger.info("Skipping base-dose smoke test: disabled by configuration")
 
-    has_predicted_doses = _contains_dose_files(config.predicted_dose_dir)
+    has_predicted_doses = contains_dose_files(config.predicted_dose_dir)
     if not has_predicted_doses:
         logger.info(
             "No predicted doses found in %s; scenario robustness will use the clinical fallback if enabled",
@@ -163,7 +163,7 @@ def collect_original_cts(original_ct_dir: Path, *, allow_empty: bool = False) ->
 
     # setdefault keeps discovery tolerant of sparse and uneven patient sets
     for path in paths:
-        patient_id = _extract_patient_id(path)
+        patient_id = extract_patient_id(path)
         originals.setdefault(patient_id, []).append(Path(path))
 
     return originals
@@ -236,7 +236,7 @@ def collect_generated_cts(generated_ct_dir: Path) -> dict[str, list[Path]]:
     # Preserve every generated variant; later metric stages decide which
     # patient/scenario pairs have a corresponding reference.
     for path in paths:
-        patient_id = _extract_patient_id(path)
+        patient_id = extract_patient_id(path)
         generated.setdefault(patient_id, []).append(Path(path))
 
     return generated
@@ -299,7 +299,7 @@ def evaluate_generated_cts(
     # they evaluate an identical snapshot of the available files.
     generated = collect_generated_cts(config.generated_ct_dir)
     originals = collect_original_cts(config.processed_ct_dir, allow_empty=True)
-    lpips_model = _build_lpips_model(config)
+    lpips_model = build_lpips_model(config)
 
     logger.info(
         "Starting evaluation: "
@@ -317,7 +317,7 @@ def evaluate_generated_cts(
     )
     # Release metric tensors before registration and structure processing,
     # which can also have substantial CPU and GPU memory footprints.
-    _clean_pipeline_memory()
+    clean_pipeline_memory()
 
     # Structure evaluation returns mask-file paths keyed by generated CT path.
     # Dose evaluation consumes the same cache later when enabled.
@@ -329,7 +329,7 @@ def evaluate_generated_cts(
             originals=originals,
             config=config,
         )
-        _clean_pipeline_memory()
+        clean_pipeline_memory()
     else:
         logger.info("Skipping generated-vs-real structure metrics: disabled by configuration")
 
@@ -339,10 +339,10 @@ def evaluate_generated_cts(
         config=config,
         lpips_model=lpips_model,
     )
-    _clean_pipeline_memory()
+    clean_pipeline_memory()
 
     # Dose evaluation can reuse the warped masks from structure evaluation
     evaluate_doses(config, warped_mask_cache=warped_mask_cache)
-    _clean_pipeline_memory()
+    clean_pipeline_memory()
 
     logger.info("Finished evaluation")
