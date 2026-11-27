@@ -386,28 +386,6 @@ def load_hu_tensor(
     )
 
 
-def _normalised_image_key(path: Path) -> str:
-    """
-    Return a filename key independent of common medical-image extensions.
-
-    Parameters
-    ----------
-    path : Path
-        Dose or structure file path.
-
-    Returns
-    -------
-    key : str
-        Filename without `.nii.gz`, `.nii`, or `.pt` suffix.
-    """
-
-    name = path.name
-    for suffix in (".nii.gz", ".nii", ".pt"):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return path.stem
-
-
 def clear_directory_contents(directory: Path) -> None:
     """
     Delete every item inside an output directory while preserving the directory.
