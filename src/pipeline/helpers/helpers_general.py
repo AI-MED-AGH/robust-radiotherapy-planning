@@ -14,7 +14,7 @@ _Task = TypeVar("_Task")
 _Result = TypeVar("_Result")
 
 
-def _run_evaluation_tasks(  # noqa: UP047
+def run_evaluation_tasks(  # noqa: UP047
     tasks: Sequence[_Task],
     prepare: Callable[[_Task], _Result],
     calculate_metrics: Callable[[_Task, _Result], None],
@@ -70,7 +70,7 @@ def _run_evaluation_tasks(  # noqa: UP047
                 del result
 
 
-def _clean_pipeline_memory() -> None:
+def clean_pipeline_memory() -> None:
     """
     Release Python garbage and cached CUDA memory between heavy pipeline stages.
 
@@ -91,7 +91,7 @@ def _clean_pipeline_memory() -> None:
     torch.cuda.empty_cache()
 
 
-def _is_planning_ct_path(path: str | Path) -> bool:
+def is_planning_ct_path(path: str | Path) -> bool:
     """
     Determine whether a CT path identifies the planning scan.
 
@@ -112,7 +112,7 @@ def _is_planning_ct_path(path: str | Path) -> bool:
     return "fraction_1_" in Path(path).name
 
 
-def _extract_all_ct_paths(data_path_list: list[str] | list[dict[str, Any]]) -> list[str]:
+def extract_all_ct_paths(data_path_list: list[str] | list[dict[str, Any]]) -> list[str]:
     """
     Extract all unique CT paths from the evaluation data list.
 
@@ -163,7 +163,7 @@ def _extract_all_ct_paths(data_path_list: list[str] | list[dict[str, Any]]) -> l
     return ct_paths
 
 
-def _extract_patient_id(path: str | Path) -> str:
+def extract_patient_id(path: str | Path) -> str:
     """
     Extract patient ID from a CT tensor filename or generated output path.
 
@@ -220,7 +220,7 @@ def _extract_patient_id(path: str | Path) -> str:
     return patient_id
 
 
-def _exclude_planning_cts(ct_groups: dict[str, list[Path]]) -> dict[str, list[Path]]:
+def exclude_planning_cts(ct_groups: dict[str, list[Path]]) -> dict[str, list[Path]]:
     """Return CT groups with planning CT tensors removed.
 
     The returned dictionary preserves every patient key and the order of each
@@ -238,12 +238,11 @@ def _exclude_planning_cts(ct_groups: dict[str, list[Path]]) -> dict[str, list[Pa
     """
 
     return {
-        patient_id: [path for path in paths if not _is_planning_ct_path(path)]
-        for patient_id, paths in ct_groups.items()
+        patient_id: [path for path in paths if not is_planning_ct_path(path)] for patient_id, paths in ct_groups.items()
     }
 
 
-def _load_tensor(path: str | Path) -> torch.Tensor:
+def load_tensor(path: str | Path) -> torch.Tensor:
     """
     Load a tensor from a `.pt` file and normalize its shape.
 
@@ -354,7 +353,7 @@ def _to_tensor_hu(
     return ((data_max - data_min) * tensor + data_min).round()
 
 
-def _load_hu_tensor(
+def load_hu_tensor(
     path: Path,
     config: MaisiTestingConfig,
     device: torch.device,
@@ -380,33 +379,11 @@ def _load_hu_tensor(
     """
 
     return _to_tensor_hu(
-        _load_tensor(path),
+        load_tensor(path),
         data_min=config.data_min,
         data_max=config.data_max,
         device=device,
     )
-
-
-def _normalised_image_key(path: Path) -> str:
-    """
-    Return a filename key independent of common medical-image extensions.
-
-    Parameters
-    ----------
-    path : Path
-        Dose or structure file path.
-
-    Returns
-    -------
-    key : str
-        Filename without `.nii.gz`, `.nii`, or `.pt` suffix.
-    """
-
-    name = path.name
-    for suffix in (".nii.gz", ".nii", ".pt"):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return path.stem
 
 
 def clear_directory_contents(directory: Path) -> None:

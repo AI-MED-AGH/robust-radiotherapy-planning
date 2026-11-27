@@ -18,8 +18,8 @@ from monai.transforms import (  # type: ignore[attr-defined]
 )
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers_general import _extract_patient_id, _load_hu_tensor
-from src.pipeline.helpers.helpers_metrics import _as_metric_tensor, _resolve_metric_device
+from src.pipeline.helpers.helpers_general import extract_patient_id, load_hu_tensor
+from src.pipeline.helpers.helpers_metrics import as_metric_tensor, resolve_metric_device
 from src.tensor_io import save_pt
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 WarpedStructureMaskCache = dict[Path, Path]
 
 
-def _save_warped_structure_masks(
+def save_warped_structure_masks(
     config: MaisiTestingConfig,
     generated_ct_path: Path,
     masks: dict[int, torch.Tensor],
@@ -69,7 +69,7 @@ def _save_warped_structure_masks(
     cache[generated_ct_path] = cache_path
 
 
-def _load_warped_structure_masks(
+def load_warped_structure_masks(
     config: MaisiTestingConfig,
     generated_ct_path: Path,
     cache: WarpedStructureMaskCache,
@@ -127,7 +127,7 @@ DemonsRegistrationAlgorithm = (
 
 
 @dataclass
-class _PatientContext:
+class PatientContext:
     """
     Preloaded CPU tensors and structure label maps for a single patient.
 
@@ -157,7 +157,7 @@ class _PatientContext:
 
 
 @dataclass
-class _StructureRegistrationResult:
+class StructureRegistrationResult:
     """
     Store the CPU registration work product for one generated CT.
 
@@ -193,7 +193,7 @@ class _StructureRegistrationResult:
     warning: str | None = None
 
 
-class _PatientContextManager:
+class PatientContextManager:
     """
     Manages loading, caching, and memory eviction of patient CPU contexts.
 
@@ -223,9 +223,9 @@ class _PatientContextManager:
         self.config = config
         self.structure_transform = structure_transform
         self.cpu_device = cpu_device
-        self._cache: dict[str, _PatientContext] = {}
+        self._cache: dict[str, PatientContext] = {}
 
-    def get(self, patient_id: str) -> _PatientContext:
+    def get(self, patient_id: str) -> PatientContext:
         """
         Retrieve or lazily build and cache the CPU context for a patient.
 
@@ -236,7 +236,7 @@ class _PatientContextManager:
 
         Returns
         -------
-        _PatientContext
+        PatientContext
             Loaded CPU context containing planning CTs, masks, and reference maps.
         """
 
@@ -246,21 +246,21 @@ class _PatientContextManager:
             planning_structure_path = spec["planning_structure_path"]
             ref_paths = spec["ref_paths"]
 
-            planning_ct = _load_hu_tensor(planning_ct_path, config=self.config, device=self.cpu_device)
-            planning_label_map = _load_structure_label_map(planning_structure_path, self.structure_transform)
+            planning_ct = load_hu_tensor(planning_ct_path, config=self.config, device=self.cpu_device)
+            planning_label_map = load_structure_label_map(planning_structure_path, self.structure_transform)
             planning_masks = {
-                label: _label_to_binary_mask(planning_label_map, label) for label in self.config.structure_labels
+                label: label_to_binary_mask(planning_label_map, label) for label in self.config.structure_labels
             }
 
             ref_label_maps = {
-                ref_path: _load_structure_label_map(
-                    _structure_path_for_ct(ref_path, self.config),
+                ref_path: load_structure_label_map(
+                    structure_path_for_ct(ref_path, self.config),
                     self.structure_transform,
                 )
                 for ref_path in ref_paths
             }
 
-            self._cache[patient_id] = _PatientContext(
+            self._cache[patient_id] = PatientContext(
                 patient_id=patient_id,
                 planning_structure_path=planning_structure_path,
                 planning_ct=planning_ct,
@@ -285,7 +285,7 @@ class _PatientContextManager:
             del self._cache[pid]
 
 
-def _get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
+def get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
     """
     Create the preprocessing transform for structure label maps.
 
@@ -323,7 +323,7 @@ def _get_structure_label_transform(config: MaisiTestingConfig) -> Compose:
     )
 
 
-def _load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
+def load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
     """
     Load and preprocess a structure label map to the pipeline target grid.
 
@@ -338,7 +338,7 @@ def _load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
 
     transform : Compose
         Label-map preprocessing transform returned by
-        ``_get_structure_label_transform``.
+        ``get_structure_label_transform``.
 
     Returns
     -------
@@ -354,7 +354,7 @@ def _load_structure_label_map(path: Path, transform: Compose) -> torch.Tensor:
     return label.round().to(torch.int16)
 
 
-def _label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
+def label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
     """
     Extract a binary structure mask from a label map.
 
@@ -381,7 +381,7 @@ def _label_to_binary_mask(label_map: torch.Tensor, label: int) -> torch.Tensor:
     return label_map == label
 
 
-def _as_binary_mask_pair(
+def as_binary_mask_pair(
     pred: torch.Tensor | np.ndarray,
     ref: torch.Tensor | np.ndarray,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -416,9 +416,9 @@ def _as_binary_mask_pair(
         If the masks have different shapes.
     """
 
-    device = _resolve_metric_device(pred, ref)
-    pred_t = _as_metric_tensor(pred, device=device) > 0
-    ref_t = _as_metric_tensor(ref, device=device) > 0
+    device = resolve_metric_device(pred, ref)
+    pred_t = as_metric_tensor(pred, device=device) > 0
+    ref_t = as_metric_tensor(ref, device=device) > 0
 
     if pred_t.numel() == 0 or ref_t.numel() == 0:
         raise ValueError("Masks cannot have zero elements")
@@ -432,7 +432,7 @@ def _as_binary_mask_pair(
     return pred_t, ref_t
 
 
-def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
+def structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
     """
     Resolve the original structure label-map path for a processed CT tensor.
 
@@ -456,7 +456,7 @@ def _structure_path_for_ct(ct_path: Path, config: MaisiTestingConfig) -> Path:
         Expected path to the corresponding structure label-map NIfTI file.
     """
 
-    patient_id = _extract_patient_id(ct_path)
+    patient_id = extract_patient_id(ct_path)
     structure_name = ct_path.name.replace(".pt", ".nii.gz")
     return config.structures_root / patient_id / structure_name
 
@@ -668,7 +668,7 @@ def _multiscale_demons(
     return sitk.DisplacementFieldTransform(displacement_field)  # type: ignore[no-untyped-call]
 
 
-def _register_planning_ct_to_generated_ct(
+def register_planning_ct_to_generated_ct(
     planning_ct: torch.Tensor,
     generated_ct: torch.Tensor,
     config: MaisiTestingConfig,
@@ -730,7 +730,7 @@ def _register_planning_ct_to_generated_ct(
     )
 
 
-def _warp_planning_mask_to_generated_ct(
+def warp_planning_mask_to_generated_ct(
     planning_mask: torch.Tensor,
     generated_ct: torch.Tensor,
     transform: Any,
@@ -780,12 +780,12 @@ def _warp_planning_mask_to_generated_ct(
     return _sitk_image_to_tensor(warped) > 0
 
 
-def _calculate_structure_registration_result(
+def calculate_structure_registration_result(
     gen_path: Path,
     patient_id: str,
     planning_ct: torch.Tensor,
     config: MaisiTestingConfig,
-) -> _StructureRegistrationResult:
+) -> StructureRegistrationResult:
     """
     Load one generated CT and calculate its planning-to-generated transform.
 
@@ -811,33 +811,33 @@ def _calculate_structure_registration_result(
 
     Returns
     -------
-    result : _StructureRegistrationResult
+    result : StructureRegistrationResult
         Registration result containing the generated CT and transform when
         registration succeeds, or a warning when the generated CT is skipped.
     """
 
     cpu_device = torch.device("cpu")
-    gen_ct = _load_hu_tensor(gen_path, config=config, device=cpu_device)
+    gen_ct = load_hu_tensor(gen_path, config=config, device=cpu_device)
 
     if gen_ct.shape != planning_ct.shape:
         warning = (
             "Skipping structure registration for "
             f"{patient_id}: {gen_path.name} {tuple(gen_ct.shape)} vs planning {tuple(planning_ct.shape)}"
         )
-        return _StructureRegistrationResult(
+        return StructureRegistrationResult(
             gen_path=gen_path,
             gen_ct=None,
             transform=None,
             warning=warning,
         )
 
-    transform = _register_planning_ct_to_generated_ct(
+    transform = register_planning_ct_to_generated_ct(
         planning_ct=planning_ct,
         generated_ct=gen_ct,
         config=config,
     )
 
-    return _StructureRegistrationResult(
+    return StructureRegistrationResult(
         gen_path=gen_path,
         gen_ct=gen_ct,
         transform=transform,

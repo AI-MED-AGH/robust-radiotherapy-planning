@@ -8,20 +8,20 @@ import torch
 from monai.metrics import compute_hausdorff_distance  # type: ignore[attr-defined]
 
 from src.pipeline.config import MaisiTestingConfig
-from src.pipeline.helpers.helpers_general import _clean_pipeline_memory, _is_planning_ct_path, _run_evaluation_tasks
+from src.pipeline.helpers.helpers_general import clean_pipeline_memory, is_planning_ct_path, run_evaluation_tasks
 from src.pipeline.helpers.helpers_registration import (
+    PatientContext,
+    PatientContextManager,
+    StructureRegistrationResult,
     WarpedStructureMaskCache,
-    _as_binary_mask_pair,
-    _calculate_structure_registration_result,
-    _get_structure_label_transform,
-    _label_to_binary_mask,
-    _load_warped_structure_masks,
-    _PatientContext,
-    _PatientContextManager,
-    _save_warped_structure_masks,
-    _structure_path_for_ct,
-    _StructureRegistrationResult,
-    _warp_planning_mask_to_generated_ct,
+    as_binary_mask_pair,
+    calculate_structure_registration_result,
+    get_structure_label_transform,
+    label_to_binary_mask,
+    load_warped_structure_masks,
+    save_warped_structure_masks,
+    structure_path_for_ct,
+    warp_planning_mask_to_generated_ct,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def dice_coefficient(pred: torch.Tensor | np.ndarray, ref: torch.Tensor | np.nda
         If the masks have different shapes.
     """
 
-    pred_t, ref_t = _as_binary_mask_pair(pred, ref)
+    pred_t, ref_t = as_binary_mask_pair(pred, ref)
     pred_sum = float(pred_t.sum().item())
     ref_sum = float(ref_t.sum().item())
 
@@ -99,7 +99,7 @@ def hausdorff_distance(
         If the masks have different shapes.
     """
 
-    pred_t, ref_t = _as_binary_mask_pair(pred, ref)
+    pred_t, ref_t = as_binary_mask_pair(pred, ref)
 
     # MONAI expects the first dimension to be batch and second to be class
     pred_t = pred_t.unsqueeze(0).unsqueeze(0)
@@ -184,7 +184,7 @@ def calculate_structure_similarity_metrics(
 
     # Structure label maps use the same geometry as preprocessed CTs.
     # Build the label-preserving transform once for all structure files.
-    structure_transform = _get_structure_label_transform(config)
+    structure_transform = get_structure_label_transform(config)
 
     # Gather valid patient specs and task list using simple (patient_id, gen_path) tuples
     patient_specs: dict[str, dict[str, Any]] = {}
@@ -192,15 +192,15 @@ def calculate_structure_similarity_metrics(
 
     for patient_id, gen_paths in generated.items():
         all_ref_paths = originals.get(patient_id, [])
-        ref_paths = [path for path in all_ref_paths if not _is_planning_ct_path(path)]
-        planning_paths = [path for path in all_ref_paths if _is_planning_ct_path(path)]
+        ref_paths = [path for path in all_ref_paths if not is_planning_ct_path(path)]
+        planning_paths = [path for path in all_ref_paths if is_planning_ct_path(path)]
 
         if len(ref_paths) == 0 or len(planning_paths) == 0:
             warnings.append(f"Skipping structure metrics for {patient_id}: missing planning or non-planning CT")
             continue
 
         planning_ct_path = planning_paths[0]
-        planning_structure_path = _structure_path_for_ct(planning_ct_path, config)
+        planning_structure_path = structure_path_for_ct(planning_ct_path, config)
 
         if not planning_structure_path.exists():
             warnings.append(f"Skipping structure metrics for {patient_id}: missing {planning_structure_path}")
@@ -208,7 +208,7 @@ def calculate_structure_similarity_metrics(
 
         valid_ref_paths: list[Path] = []
         for ref_path in ref_paths:
-            ref_structure_path = _structure_path_for_ct(ref_path, config)
+            ref_structure_path = structure_path_for_ct(ref_path, config)
             if not ref_structure_path.exists():
                 warnings.append(f"Skipping missing reference structure for {patient_id}: {ref_structure_path}")
                 continue
@@ -232,7 +232,7 @@ def calculate_structure_similarity_metrics(
         logger.warning("Skipping structure metrics: no valid structure comparisons were calculated")
         return warped_mask_cache
 
-    ctx_mgr = _PatientContextManager(
+    ctx_mgr = PatientContextManager(
         specs=patient_specs,
         config=config,
         structure_transform=structure_transform,
@@ -244,25 +244,25 @@ def calculate_structure_similarity_metrics(
         patient_id: str,
         planning_ct: torch.Tensor,
         config: MaisiTestingConfig,
-    ) -> _StructureRegistrationResult:
+    ) -> StructureRegistrationResult:
         # Only completed writes are indexed; no disk lookup is needed here
         if gen_path in warped_mask_cache:
-            return _StructureRegistrationResult(gen_path=gen_path, gen_ct=None, transform=None)
-        return _calculate_structure_registration_result(gen_path, patient_id, planning_ct, config)
+            return StructureRegistrationResult(gen_path=gen_path, gen_ct=None, transform=None)
+        return calculate_structure_registration_result(gen_path, patient_id, planning_ct, config)
 
     def append_metrics_for_registration(
-        result: _StructureRegistrationResult,
-        current_ctx: _PatientContext,
+        result: StructureRegistrationResult,
+        current_ctx: PatientContext,
     ) -> None:
         """
         Warp registered planning masks and append metric rows.
 
         Parameters
         ----------
-        result : _StructureRegistrationResult
+        result : StructureRegistrationResult
             Completed registration result for one generated CT.
 
-        current_ctx : _PatientContext
+        current_ctx : PatientContext
             Loaded patient CPU context containing planning masks and reference maps.
         """
 
@@ -273,7 +273,7 @@ def calculate_structure_similarity_metrics(
         if result.info_message is not None:
             info_messages.append(result.info_message)
 
-        cached_masks = _load_warped_structure_masks(config, result.gen_path, warped_mask_cache)
+        cached_masks = load_warped_structure_masks(config, result.gen_path, warped_mask_cache)
         has_cached_masks = cached_masks is not None
         if not has_cached_masks and (result.gen_ct is None or result.transform is None):
             warnings.append(
@@ -297,7 +297,7 @@ def calculate_structure_similarity_metrics(
                         raise RuntimeError(
                             f"Cannot warp structure label {label} for {result.gen_path}: missing registration data"
                         )
-                    pred_mask_cpu = _warp_planning_mask_to_generated_ct(
+                    pred_mask_cpu = warp_planning_mask_to_generated_ct(
                         planning_mask=current_ctx.planning_masks[label],
                         generated_ct=gen_ct,
                         transform=transform,
@@ -308,8 +308,8 @@ def calculate_structure_similarity_metrics(
                 pred_mask = pred_mask_cpu.to(metric_device)
 
                 for ref_path, ref_label_map in current_ctx.ref_label_maps.items():
-                    ref_structure_path = _structure_path_for_ct(ref_path, config)
-                    ref_mask = _label_to_binary_mask(ref_label_map, label).to(metric_device)
+                    ref_structure_path = structure_path_for_ct(ref_path, config)
+                    ref_mask = label_to_binary_mask(ref_label_map, label).to(metric_device)
                     try:
                         dice = dice_coefficient(pred_mask, ref_mask)
                         hd = hausdorff_distance(pred_mask, ref_mask, spacing=config.spacing)
@@ -321,7 +321,7 @@ def calculate_structure_similarity_metrics(
                         continue
 
                     # MONAI is prone to not clean memory properly when calculating Hausdorff
-                    _clean_pipeline_memory()
+                    clean_pipeline_memory()
 
                     rows.append(
                         {
@@ -338,9 +338,9 @@ def calculate_structure_similarity_metrics(
                     )
 
             if not has_cached_masks:
-                _save_warped_structure_masks(config, result.gen_path, generated_masks, warped_mask_cache)
+                save_warped_structure_masks(config, result.gen_path, generated_masks, warped_mask_cache)
 
-    def prepare_task(task: tuple[str, Path]) -> tuple[_StructureRegistrationResult, _PatientContext]:
+    def prepare_task(task: tuple[str, Path]) -> tuple[StructureRegistrationResult, PatientContext]:
         patient_id, gen_path = task
         # Only the preparation worker owns the context manager. The current
         # metric callback holds its own context reference while the worker
@@ -352,12 +352,12 @@ def calculate_structure_similarity_metrics(
 
     def calculate_task_metrics(
         task: tuple[str, Path],
-        prepared: tuple[_StructureRegistrationResult, _PatientContext],
+        prepared: tuple[StructureRegistrationResult, PatientContext],
     ) -> None:
         result, context = prepared
         append_metrics_for_registration(result, context)
 
-    _run_evaluation_tasks(
+    run_evaluation_tasks(
         tasks,
         prepare_task,
         calculate_task_metrics,
